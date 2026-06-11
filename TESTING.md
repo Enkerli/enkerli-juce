@@ -61,6 +61,27 @@ handling all vary by device generation and OS version.
   ship content in BinaryData or App Group containers (Vane's wavetable
   "iOS-friendly load path" exists for this reason).
 
+## "The AUv3 doesn't show up in AUM" ritual (in order)
+
+1. **aumi plugins live under MIDI Processor nodes**, not the Audio Unit
+   source/effect pickers. In AUM: **+ → MIDI Processor** → your plugin.
+   Instruments (aumu) are the ones in the audio pickers. Wrong-list is the
+   most common "missing plugin" of all.
+2. Install the **Standalone** scheme (it embeds the appex in `PlugIns/`)
+   and **launch the app once** on the device — that triggers extension
+   registration. Building the AUv3 scheme alone installs nothing usable.
+3. Registration cache: force-quit and relaunch the host → reboot the iPad
+   → delete app, reboot, reinstall. (iOS's slower, more stubborn version
+   of macOS's `killall AudioComponentRegistrar`.)
+4. Signing: app **and** appex must be signed with the same team
+   (`-DENKERLI_IOS_TEAM_ID`). A team mismatch installs a working app whose
+   extension silently never registers.
+5. Only then suspect the plist. Verify the artifact before suspecting the
+   device:
+   `plutil -p <app>/PlugIns/*.appex/Info.plist` — wants `type aumi` (or
+   `aumu`), 4-char subtype/manufacturer, `NSExtensionPointIdentifier`
+   `com.apple.AudioUnit-UI`, and an appex bundle id prefixed by the app's.
+
 ## Per-release checklist
 
 - [ ] macOS build matrix green
