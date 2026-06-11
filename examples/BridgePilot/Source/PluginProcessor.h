@@ -1,6 +1,7 @@
 #pragma once
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "../../../src/MidiClipScheduler.h"
+#include "../../../src/TransportSnapshot.h"
 
 // BridgePilot — minimal aumi pathfinder proving the foundation:
 // archetype CMake settings + WebView bridge + host-synced MIDI scheduler.
@@ -18,14 +19,17 @@ public:
     void processBlock (juce::AudioBuffer<float>& audio, juce::MidiBuffer& midi) override
     {
         audio.clear();
-        // Pass incoming MIDI through, add scheduled clip events.
-        scheduler.process (getPlayHead(), sampleRate, audio.getNumSamples() > 0 ? audio.getNumSamples() : lastBlockSize, midi);
+        if (audio.getNumSamples() > 0)
+            lastBlockSize = audio.getNumSamples();
+        transport.capture (getPlayHead()); // audio thread — the only safe place
+        scheduler.process (getPlayHead(), sampleRate, lastBlockSize, midi);
     }
 
     void processBlock (juce::AudioBuffer<double>& audio, juce::MidiBuffer& midi) override
     {
-        juce::AudioBuffer<float> dummy;
-        juce::ignoreUnused (audio);
+        if (audio.getNumSamples() > 0)
+            lastBlockSize = audio.getNumSamples();
+        transport.capture (getPlayHead());
         scheduler.process (getPlayHead(), sampleRate, lastBlockSize, midi);
     }
 
@@ -49,6 +53,7 @@ public:
     void setStateInformation (const void*, int) override {}
 
     enkerli::MidiClipScheduler scheduler;
+    enkerli::TransportSnapshot transport;
 
 private:
     double sampleRate = 44100.0;

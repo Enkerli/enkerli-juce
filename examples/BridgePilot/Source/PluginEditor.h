@@ -54,17 +54,11 @@ private:
     {
         if (! pageReady)
             return;
-        double bpm = 0.0;
-        bool playing = false;
-        if (auto* ph = proc.getPlayHead())
-            if (auto pos = ph->getPosition())
-            {
-                if (auto b = pos->getBpm()) bpm = *b;
-                playing = pos->getIsPlaying();
-            }
+        // Never query AudioPlayHead here (message thread) — read the
+        // processor's audio-thread snapshot instead (TransportSnapshot.h).
         auto* obj = new juce::DynamicObject();
-        obj->setProperty ("bpm", bpm);
-        obj->setProperty ("playing", playing);
+        obj->setProperty ("bpm", proc.transport.getBpm());
+        obj->setProperty ("playing", proc.transport.isPlaying());
         web.emit ("transport", juce::var (obj));
     }
 

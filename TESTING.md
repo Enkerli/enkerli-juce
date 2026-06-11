@@ -57,6 +57,12 @@ handling all vary by device generation and OS version.
 - **WKWebView in an AUv3 extension works** (Vane ships it) but the
   extension's memory ceiling is the binding constraint: keep bundles lean,
   avoid large in-page assets, prefer canvas redraw over DOM churn.
+- **AudioPlayHead is audio-thread only.** Querying `getPlayHead()` from an
+  editor timer returns empty/stale data in AUv3 hosts — AUM shows "stopped"
+  while playing — though some macOS hosts let it slide, which is exactly why
+  it survives desktop testing. Capture in `processBlock` into
+  `enkerli::TransportSnapshot` (atomics); UIs read the snapshot.
+  (Found on-device in BridgePilot, 2026-06-12.)
 - **iPadOS file access**: extensions can't show document pickers reliably;
   ship content in BinaryData or App Group containers (Vane's wavetable
   "iOS-friendly load path" exists for this reason).
