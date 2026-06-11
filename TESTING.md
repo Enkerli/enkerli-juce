@@ -28,6 +28,24 @@ as working until it has passed this ladder — "it builds" is step zero.
 ```bash
 enkerli-juce/tools/validate.sh <project-dir> <aumi|aumu> <CODE> [ProductName]
 ```
+
+**Rung 0 for WebView UIs — render the artifact before it ships:**
+```bash
+swift enkerli-juce/tools/webview-smoke.swift <index.html | http://…>
+```
+A real WKWebView (the same engine as iPadOS) loads the exact embedded
+bundle and fails unless the UI mounts with zero page errors. Wire it
+into the bundle build (Progression Studio's WebUI/build.mjs does).
+Unit tests of pure logic never *render* — the smoke caught an App-level
+render crash (TDZ in a hook dependency array referencing a memo declared
+later) that 649 passing unit tests sailed past and an iPad found first.
+For diagnosis: file:// sanitizes errors to "Script error."; re-run over
+http://localhost (`python3 -m http.server`) with an unminified build
+(`PSP_DEBUG=1`) to get real names and stacks. jsc (the raw engine,
+`/System/Library/Frameworks/JavaScriptCore.framework/.../jsc`) separates
+JS-semantics failures from DOM-context ones. happy-dom/jsdom are NOT
+faithful runtimes for this purpose — they failed to execute the bundle
+at all while WKWebView ran it.
 4. **Real hosts, real devices** (manual — the part that cannot be skipped).
    The foundation makes runtime state readable ON the device:
    - `RuntimeInfo` (src/RuntimeInfo.h): the UI shows host name, wrapper,
