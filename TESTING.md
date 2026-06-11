@@ -21,9 +21,24 @@ as working until it has passed this ladder — "it builds" is step zero.
    - BridgePilot (this repo's pathfinder) passes — any archetype change to
      `EnkerliPlugin.cmake` must keep it passing.
 3. **pluginval** (automatable, macOS, VST3+AU):
-   `pluginval --strictness-level 8 <path>` — catches threading and
-   lifecycle issues auval doesn't.
-4. **Real hosts, real devices** (manual — the part that cannot be skipped):
+   `pluginval --strictness-level 8 --validate-in-process --skip-gui-tests <path>`
+   — catches threading and lifecycle issues auval doesn't.
+
+**Rungs 1–3 in one command** (used by every suite plugin):
+```bash
+enkerli-juce/tools/validate.sh <project-dir> <aumi|aumu> <CODE> [ProductName]
+```
+4. **Real hosts, real devices** (manual — the part that cannot be skipped).
+   The foundation makes runtime state readable ON the device:
+   - `RuntimeInfo` (src/RuntimeInfo.h): the UI shows host name, wrapper,
+     sample rate, JUCE version, and **phys_footprint memory** — the number
+     iOS enforces extension limits against. Watch it on the oldest iPad;
+     extensions die without a dialog when it crosses the ceiling.
+   - The error overlay (plugin web builds): uncaught JS errors paint onto
+     the page — a blank WebView always names its reason.
+   - BridgePilot additionally probes bridge round-trip latency
+     (enkerliPing/Pong) — a stalling bridge shows up as climbing ms.
+
 
 | Surface | Hosts to cover | What breaks here |
 |---|---|---|
