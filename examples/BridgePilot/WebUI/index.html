@@ -17,6 +17,9 @@
   <div id="status">bridge: …</div>
   <button id="play">Send ii–V–I loop</button>
   <button id="clear">Clear clip</button>
+  <label style="display:flex;align-items:center;gap:8px;min-height:44px">
+    <input type="checkbox" id="freerun"> Free-run (play without host transport)
+  </label>
   <script>
     // Inlined minimal bridge (same contract as enkerli-bridge.js).
     const HAS_JUCE = typeof window.__JUCE__ !== "undefined" && !!window.__JUCE__.backend;
@@ -45,6 +48,8 @@
     document.getElementById("play").onclick = () =>
       send("enkerliSetClip", { notes: clip, lengthBeats: 8, loop: true });
     document.getElementById("clear").onclick = () => send("enkerliClearClip", {});
+    document.getElementById("freerun").onchange = (e) =>
+      send("enkerliFreeRun", { on: e.target.checked });
 
     send("uiReady", {});
   </script>

@@ -16,6 +16,8 @@ public:
                   { "uiReady", [this] (const juce::var&) { pageReady = true; } },
                   { "enkerliSetClip", [this] (const juce::var& v) { applyClip (v); } },
                   { "enkerliClearClip", [this] (const juce::var&) { proc.scheduler.clear(); } },
+                  { "enkerliFreeRun", [this] (const juce::var& v) {
+                        proc.scheduler.setRunWithoutTransport (static_cast<bool> (v.getProperty ("on", false))); } },
               })
     {
         addAndMakeVisible (web);
@@ -46,8 +48,7 @@ private:
                 clip.notes.push_back (note);
             }
         }
-        proc.scheduler.setRunWithoutTransport (true); // pilot: audible without a transport
-        proc.scheduler.setClip (std::move (clip));
+        proc.scheduler.setClip (std::move (clip)); // strict host sync unless freeRun toggled
     }
 
     void timerCallback() override
