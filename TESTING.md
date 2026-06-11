@@ -62,7 +62,10 @@ handling all vary by device generation and OS version.
   stays silently blank on iPadOS (classic inline scripts work — Vane and
   BridgePilot both use them). Build embedded bundles as classic IIFE and
   inject an error overlay so a blank page can never be silent.
-  (Found on-device in the Progression Studio plugin, 2026-06-12.)
+  Corollary: classic inline scripts are NOT deferred — place them at the
+  END of <body>, or they run before the DOM exists (React error #299).
+  (Both found on-device in the Progression Studio plugin, 2026-06-12 —
+  the second one by the overlay itself, same day it was added.)
 - **WKWebView log noise is not your bug**: `ManagedConfiguration: Could
   not create a sandbox extension`, `ResourceLoadStatistics: fopen failed`,
   and `Unable to hide query parameters` appear in healthy WKWebView apps.
