@@ -1,6 +1,7 @@
 #pragma once
 #include "PluginProcessor.h"
 #include "../../../src/EnkerliWebView.h"
+#include "../../../src/RuntimeInfo.h"
 #include "BinaryDataWebUI.h"
 
 class BridgePilotEditor : public juce::AudioProcessorEditor,
@@ -18,6 +19,8 @@ public:
                   { "enkerliClearClip", [this] (const juce::var&) { proc.scheduler.clear(); } },
                   { "enkerliFreeRun", [this] (const juce::var& v) {
                         proc.scheduler.setRunWithoutTransport (static_cast<bool> (v.getProperty ("on", false))); } },
+                  // Bridge round-trip probe: echo the payload back untouched.
+                  { "enkerliPing", [this] (const juce::var& v) { web.emit ("enkerliPong", v); } },
               })
     {
         addAndMakeVisible (web);
@@ -61,11 +64,15 @@ private:
         obj->setProperty ("bpm", proc.transport.getBpm());
         obj->setProperty ("playing", proc.transport.isPlaying());
         web.emit ("transport", juce::var (obj));
+
+        if (++runtimeTick % 8 == 0) // every ~2 s at 4 Hz
+            web.emit ("runtime", enkerli::RuntimeInfo::snapshot (proc));
     }
 
     BridgePilotProcessor& proc;
     enkerli::BridgedWebView web;
     bool pageReady = false;
+    int runtimeTick = 0;
 };
 
 inline juce::AudioProcessorEditor* BridgePilotProcessor::createEditor()

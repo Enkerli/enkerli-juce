@@ -15,6 +15,7 @@
 <body>
   <h2 style="margin:0">BridgePilot</h2>
   <div id="status">bridge: …</div>
+  <div id="runtime" style="font:12px ui-monospace,monospace;opacity:.7">runtime: …</div>
   <button id="play">Send ii–V–I loop</button>
   <button id="clear">Clear clip</button>
   <label style="display:flex;align-items:center;gap:8px;min-height:44px">
@@ -50,6 +51,15 @@
     document.getElementById("clear").onclick = () => send("enkerliClearClip", {});
     document.getElementById("freerun").onchange = (e) =>
       send("enkerliFreeRun", { on: e.target.checked });
+
+    on("runtime", (r) => {
+      document.getElementById("runtime").textContent =
+        `runtime: ${r.host} · ${r.wrapper} · ${r.memMB} MB · ${r.sampleRate} Hz · juce ${r.juce}` +
+        (pingMs !== null ? ` · bridge ${pingMs.toFixed(1)} ms` : "");
+    });
+    let pingMs = null;
+    on("enkerliPong", (p) => { pingMs = performance.now() - p.t; });
+    setInterval(() => send("enkerliPing", { t: performance.now() }), 2000);
 
     send("uiReady", {});
   </script>
