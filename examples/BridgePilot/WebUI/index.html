@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BridgePilot</title>
+<style>
+  :root { color-scheme: light dark; font-family: -apple-system, system-ui, sans-serif; }
+  body { margin: 0; padding: 16px; display: grid; gap: 12px; }
+  button { min-height: 44px; font-size: 16px; border-radius: 6px; border: 1px solid #888;
+           padding: 0 16px; cursor: pointer; }
+  #status { font-family: ui-monospace, monospace; font-size: 13px; opacity: 0.8; }
+</style>
+</head>
+<body>
+  <h2 style="margin:0">BridgePilot</h2>
+  <div id="status">bridge: …</div>
+  <button id="play">Send ii–V–I loop</button>
+  <button id="clear">Clear clip</button>
+  <script>
+    // Inlined minimal bridge (same contract as enkerli-bridge.js).
+    const HAS_JUCE = typeof window.__JUCE__ !== "undefined" && !!window.__JUCE__.backend;
+    const send = (id, p) => { if (HAS_JUCE) window.__JUCE__.backend.emitEvent(id, p ?? {}); };
+    const on = (id, cb) => { if (HAS_JUCE) window.__JUCE__.backend.addEventListener(id, cb); };
+
+    const status = document.getElementById("status");
+    status.textContent = "bridge: " + (HAS_JUCE ? "juce" : "none (browser preview)");
+
+    on("transport", (t) => {
+      status.textContent = `bridge: juce · host ${t.playing ? "playing" : "stopped"}` +
+        (t.bpm ? ` · ${Math.round(t.bpm)} bpm` : "");
+    });
+
+    // A ii–V–I in C, two beats per chord, voiced simply: proof of the
+    // whole path Web → bridge → scheduler → host MIDI.
+    const chord = (startBeat, pitches) => pitches.map((p) => ({
+      startBeat, lengthBeats: 2, pitch: p, velocity: 84, channel: 1,
+    }));
+    const clip = [
+      ...chord(0, [38, 62, 65, 69, 72]),  // Dm7
+      ...chord(2, [43, 62, 65, 71, 74]),  // G7
+      ...chord(4, [36, 60, 64, 67, 71]),  // Cmaj7
+    ];
+
+    document.getElementById("play").onclick = () =>
+      send("enkerliSetClip", { notes: clip, lengthBeats: 8, loop: true });
+    document.getElementById("clear").onclick = () => send("enkerliClearClip", {});
+
+    send("uiReady", {});
+  </script>
+</body>
+</html>
