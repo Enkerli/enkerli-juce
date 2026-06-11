@@ -57,6 +57,16 @@ handling all vary by device generation and OS version.
 - **WKWebView in an AUv3 extension works** (Vane ships it) but the
   extension's memory ceiling is the binding constraint: keep bundles lean,
   avoid large in-page assets, prefer canvas redraw over DOM churn.
+- **Inline ES modules don't run under the custom scheme in WKWebView.**
+  A `<script type="module">` page served via JUCE's resource provider
+  stays silently blank on iPadOS (classic inline scripts work — Vane and
+  BridgePilot both use them). Build embedded bundles as classic IIFE and
+  inject an error overlay so a blank page can never be silent.
+  (Found on-device in the Progression Studio plugin, 2026-06-12.)
+- **WKWebView log noise is not your bug**: `ManagedConfiguration: Could
+  not create a sandbox extension`, `ResourceLoadStatistics: fopen failed`,
+  and `Unable to hide query parameters` appear in healthy WKWebView apps.
+  Diagnose blanks with an in-page error overlay, not the device console.
 - **AudioPlayHead is audio-thread only.** Querying `getPlayHead()` from an
   editor timer returns empty/stale data in AUv3 hosts — AUM shows "stopped"
   while playing — though some macOS hosts let it slide, which is exactly why
