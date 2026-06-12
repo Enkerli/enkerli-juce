@@ -85,6 +85,7 @@ public:
                 flushActive (midi, 0);
             wasRunning = false;
             positionValid = false;
+            clipBeat.store (-1.0, std::memory_order_relaxed);
             return;
         }
 
@@ -107,6 +108,13 @@ public:
         }
         const double blockEnd = blockStart + blockBeats;
 
+        // Clip-relative position for UI chord-following (message thread
+        // reads the atomic; -1 = not running).
+        const double wrapped = current->loop
+            ? std::fmod (std::max (0.0, blockStart), current->lengthBeats)
+            : blockStart;
+        clipBeat.store (wrapped, std::memory_order_relaxed);
+
         emitWindow (blockStart, blockEnd, beatsPerSample, numSamples, midi);
 
         internalBeat = blockEnd;
@@ -117,6 +125,9 @@ public:
 
     /** All-notes-off into the buffer (e.g. from releaseResources). */
     void panic (juce::MidiBuffer& midi) { flushActive (midi, 0); }
+
+    /** Clip-relative beat for UI chord-following; -1 when not running. */
+    double getClipBeat() const noexcept { return clipBeat.load (std::memory_order_relaxed); }
 
 private:
     struct Active
@@ -180,6 +191,7 @@ private:
     std::shared_ptr<const Clip> current;
     std::vector<Active> active;
     std::atomic<double> fallbackBpm { 120.0 };
+    std::atomic<double> clipBeat { -1.0 };
     std::atomic<bool> freeRun { false };
     double internalBeat = 0.0;
     double expectedNextPpq = 0.0;
