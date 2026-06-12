@@ -43,7 +43,7 @@ endmacro()
 # ── Internal: shared argument parsing + platform-split juce_add_plugin ──────
 function(_enkerli_add_plugin target archetype)
     cmake_parse_arguments(ARG ""
-        "PRODUCT_NAME;PLUGIN_CODE;BUNDLE_ID;VERSION;DESCRIPTION;ICON_BIG;ICON_SMALL;LV2_URI"
+        "PRODUCT_NAME;PLUGIN_CODE;BUNDLE_ID;VERSION;DESCRIPTION;ICON_BIG;ICON_SMALL;LV2_URI;PLIST_TO_MERGE"
         "" ${ARGN})
 
     if(NOT ARG_PRODUCT_NAME)
@@ -105,8 +105,16 @@ function(_enkerli_add_plugin target archetype)
         VERSION                     "${ARG_VERSION}"
         DESCRIPTION                 "${ARG_DESCRIPTION}"
         EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+        # No suite plugin records audio; never trigger the mic-permission
+        # dialog (it also complicates App Review).
+        MICROPHONE_PERMISSION_ENABLED FALSE
         ${_type_props}
         ${_icon_props})
+
+    set(_ios_plist "")
+    if(ARG_PLIST_TO_MERGE)
+        set(_ios_plist PLIST_TO_MERGE "${ARG_PLIST_TO_MERGE}")
+    endif()
 
     if(CMAKE_SYSTEM_NAME STREQUAL "iOS")
         # iPadOS lessons (each learned the hard way):
@@ -123,6 +131,7 @@ function(_enkerli_add_plugin target archetype)
             COPY_PLUGIN_AFTER_BUILD     FALSE
             DEVELOPMENT_TEAM            "${ENKERLI_IOS_TEAM_ID}"
             BACKGROUND_AUDIO_ENABLED    TRUE
+            ${_ios_plist}
             IPHONE_SCREEN_ORIENTATIONS
                 UIInterfaceOrientationPortrait
                 UIInterfaceOrientationPortraitUpsideDown
