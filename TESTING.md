@@ -108,7 +108,14 @@ handling all vary by device generation and OS version.
   (FileExport.h): FileChooser on desktop, share sheet on iPadOS —
   presented from the responder chain, since document pickers are the
   unreliable path inside appexes. (Found in AUM: Progression Studio MIDI
-  export, 2026-06-12.)
+  export, 2026-06-12.) Device-verified working 2026-06-12 — and it adds
+  its own benign log storm: `Failed to request default share mode for
+  fileURL … -10814`, `Only support loading options for CKShare and SWY
+  types`, `error fetching item/file provider domain for URL`, `Failed to
+  locate container app bundle record`, LaunchServices `-54 process may
+  not map database`, RemoteTextInput sessionID errors. All of it appears
+  on a SUCCESSFUL share-sheet save; judge by whether the sheet appeared
+  and the file landed, not by the console.
 - **WKWebView log noise is not your bug**: `ManagedConfiguration: Could
   not create a sandbox extension`, `ResourceLoadStatistics: fopen failed`,
   and `Unable to hide query parameters` appear in healthy WKWebView apps.
