@@ -8,9 +8,9 @@
 //   * macOS / Linux standalone — async juce::FileChooser open dialog.
 //   * iOS / iPadOS — UIDocumentPickerViewController (asCopy, so no
 //     security-scoped bookkeeping), presented from the responder chain.
-//     TESTING.md flags pickers in appexes as the historically unreliable
-//     path — treat on-device AUv3 import as experimental until verified
-//     per host; the callback simply never fires when presentation fails.
+//     Device-verified working inside AUM's AUv3 (2026-06-12, MIDIcurator);
+//     other hosts unverified — the callback simply never fires when
+//     presentation fails, so degradation is silent but safe.
 //
 // The iOS implementation is ObjC++: add src/FileImport.mm to the plugin's
 // sources when targeting Apple platforms (it compiles empty on macOS).

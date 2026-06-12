@@ -134,9 +134,13 @@ handling all vary by device generation and OS version.
   testing because humans don't close editors mid-automation. Capture
   `juce::Component::SafePointer` in every queued/cross-thread lambda and
   null-check it. (Found by pluginval in PitchFold, 2026-06-12.)
-- **iPadOS file access**: extensions can't show document pickers reliably;
-  ship content in BinaryData or App Group containers (Vane's wavetable
-  "iOS-friendly load path" exists for this reason).
+- **iPadOS file access**: PARTLY REHABILITATED 2026-06-12 — a
+  `UIDocumentPickerViewController` (`asCopy:YES`, presented from the
+  responder chain: `enkerli::importFile`) **works inside AUM's AUv3**,
+  device-verified importing MIDI into MIDIcurator. The old guidance
+  (ship content in BinaryData or App Group containers — Vane's wavetable
+  "iOS-friendly load path") still applies to *bulk/always-needed* content
+  and to hosts not yet tested; verify per host before relying on it.
 
 ## "The AUv3 doesn't show up in AUM" ritual (in order)
 
