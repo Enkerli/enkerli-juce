@@ -99,6 +99,16 @@ handling all vary by device generation and OS version.
   END of <body>, or they run before the DOM exists (React error #299).
   (Both found on-device in the Progression Studio plugin, 2026-06-12 —
   the second one by the overlay itself, same day it was added.)
+- **WKWebView cannot download.** A `blob:`/`data:` anchor click (the
+  standard browser "save file" idiom) has no download manager under the
+  juce:// scheme: WebKit aborts with **"Frame load interrupted" on a dead
+  blank page** — no back navigation, UI gone until the editor reopens.
+  Send the bytes over the bridge (`saveFile` in enkerli-bridge.js →
+  "enkerliSaveFile") and save natively with `enkerli::exportBytes()`
+  (FileExport.h): FileChooser on desktop, share sheet on iPadOS —
+  presented from the responder chain, since document pickers are the
+  unreliable path inside appexes. (Found in AUM: Progression Studio MIDI
+  export, 2026-06-12.)
 - **WKWebView log noise is not your bug**: `ManagedConfiguration: Could
   not create a sandbox extension`, `ResourceLoadStatistics: fopen failed`,
   and `Unable to hide query parameters` appear in healthy WKWebView apps.
