@@ -109,6 +109,14 @@ handling all vary by device generation and OS version.
   it survives desktop testing. Capture in `processBlock` into
   `enkerli::TransportSnapshot` (atomics); UIs read the snapshot.
   (Found on-device in BridgePilot, 2026-06-12.)
+- **`callAsync` lambdas outlive the editor.** `parameterChanged` (and any
+  host callback) can fire off the message thread while the host is tearing
+  the editor down; a queued `MessageManager::callAsync` capturing raw
+  `this` then runs on a freed editor. pluginval 8's "Open editor whilst
+  processing" segfaults on exactly this — and it survives casual host
+  testing because humans don't close editors mid-automation. Capture
+  `juce::Component::SafePointer` in every queued/cross-thread lambda and
+  null-check it. (Found by pluginval in PitchFold, 2026-06-12.)
 - **iPadOS file access**: extensions can't show document pickers reliably;
   ship content in BinaryData or App Group containers (Vane's wavetable
   "iOS-friendly load path" exists for this reason).
