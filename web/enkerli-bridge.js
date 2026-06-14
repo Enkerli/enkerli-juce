@@ -56,6 +56,18 @@ export function createBridge() {
     },
 
     /**
+     * Incoming MIDI notes (chord input). The processor collects host MIDI
+     * in on the audio thread (enkerli::MidiInputCollector) and the editor
+     * timer emits batches as "midiNotes": { notes: [{ note, velocity, on }] }.
+     * Use trackHeldNotes() to maintain the held-note set robustly (a
+     * dropped note-off under overload would otherwise stick). In Chromium a
+     * WebMIDI fallback could feed the same shape; elsewhere it's silent.
+     */
+    onMidiNotes(callback) {
+      return bridge.on("midiNotes", (data) => callback(data?.notes ?? []));
+    },
+
+    /**
      * Save bytes through native UI (enkerli::exportBytes — FileChooser on
      * desktop, share sheet on iPadOS). Returns false outside the plugin so
      * callers can fall back to a browser download. NEVER use blob:/data:
