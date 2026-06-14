@@ -163,6 +163,23 @@ handling all vary by device generation and OS version.
    `aumu`), 4-char subtype/manufacturer, `NSExtensionPointIdentifier`
    `com.apple.AudioUnit-UI`, and an appex bundle id prefixed by the app's.
 
+### Stale AUv3 *icon* in AUM (a distinct cache from registration)
+
+AUM caches the AUv3's icon keyed by the **AudioComponent version**, separate
+from the registration cache — so a new icon shows on the SpringBoard
+(SpringBoard reads the app's `AppIcon`) but AUM keeps drawing the old one,
+and delete+reboot does *not* clear it because the component version is
+unchanged. **Trigger: bump the plugin `VERSION`** (CFBundleVersion of the
+appex; pass `VERSION "${PROJECT_VERSION}"` and bump `project(... VERSION)`),
+rebuild, reinstall, relaunch the standalone once. The version change forces
+`audiocomponentregistrard` to re-read the bundle, icon included.
+(Reported in AUM 2026-06-13: new suite icons visible in SpringBoard but not
+AUM after delete+reboot; versions bumped 0.1.0→0.1.1 as the buster.
+Unverified on-device at time of writing — if the bump alone doesn't fix it,
+the next suspect is whether JUCE embedded the icon in the *appex* bundle vs
+only the standalone: check `<app>/PlugIns/*.appex/` for the `AppIcon*.png`
+set, not just the app's.)
+
 ## Per-release checklist
 
 - [ ] macOS build matrix green
