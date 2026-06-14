@@ -126,6 +126,21 @@ handling all vary by device generation and OS version.
   it survives desktop testing. Capture in `processBlock` into
   `enkerli::TransportSnapshot` (atomics); UIs read the snapshot.
   (Found on-device in BridgePilot, 2026-06-12.)
+- **`window.confirm`/`alert`/`prompt` are NO-OPS in the WebView.** JUCE's
+  WebBrowserComponent wires no native JS dialog panel, so `confirm()`
+  returns falsy immediately and `alert()`/`prompt()` do nothing. Any
+  destructive action guarded by `if (confirm(...))` then SILENTLY never
+  runs on device — looks like a dead button. (Found: MIDIcurator's
+  "Clear All" and per-clip "Delete" did nothing in the AUv3.) Use a
+  DOM-based dialog instead — `@enkerli/ui/confirm` (`esConfirm`/`esAlert`,
+  Promise-based, token-styled, works in both browser and WebView).
+- **`fetch('/relative/asset')` 404s in the WebView.** The page is served
+  from a custom resource-provider scheme with no co-located HTTP server,
+  so any app feature that fetches bundled assets by path (MIDIcurator's
+  sample-progression loader, the loop DB) fails — in the standalone *and*
+  the AUv3. Gate such features on a real origin
+  (`!IN_PLUGIN && /^https?:$/.test(location.protocol)`), or embed the
+  asset in BinaryData. (Found: iPadOS standalone, 2026-06-14.)
 - **`callAsync` lambdas outlive the editor.** `parameterChanged` (and any
   host callback) can fire off the message thread while the host is tearing
   the editor down; a queued `MessageManager::callAsync` capturing raw
