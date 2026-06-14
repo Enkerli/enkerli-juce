@@ -173,12 +173,16 @@ unchanged. **Trigger: bump the plugin `VERSION`** (CFBundleVersion of the
 appex; pass `VERSION "${PROJECT_VERSION}"` and bump `project(... VERSION)`),
 rebuild, reinstall, relaunch the standalone once. The version change forces
 `audiocomponentregistrard` to re-read the bundle, icon included.
-(Reported in AUM 2026-06-13: new suite icons visible in SpringBoard but not
-AUM after delete+reboot; versions bumped 0.1.0→0.1.1 as the buster.
-Unverified on-device at time of writing — if the bump alone doesn't fix it,
-the next suspect is whether JUCE embedded the icon in the *appex* bundle vs
-only the standalone: check `<app>/PlugIns/*.appex/` for the `AppIcon*.png`
-set, not just the app's.)
+**RESOLVED on-device 2026-06-13**: the version bump (0.1.0→0.1.1) was
+necessary but NOT sufficient — what finally refreshed the icons was
+**force-quitting AUM** (swipe it away in the app switcher), *not* a reboot.
+Surprising but important: **AUM caches AUv3 icons in its own process and a
+reboot relaunches it from that cache — only a clean quit re-reads them.** So
+the real ritual is: bump `VERSION`, rebuild/reinstall, launch the standalone
+once, then **force-quit and relaunch AUM**. (PitchFold's appeared first
+because it already carried the bumped version; ProgGenie/MIDIcurator showed
+after the AUM quit.) Reboot is the wrong reflex here — it's the registration
+cache's fix, not the icon cache's.
 
 ## Per-release checklist
 
