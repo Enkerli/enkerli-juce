@@ -149,6 +149,20 @@ handling all vary by device generation and OS version.
   testing because humans don't close editors mid-automation. Capture
   `juce::Component::SafePointer` in every queued/cross-thread lambda and
   null-check it. (Found by pluginval in PitchFold, 2026-06-12.)
+- **MIDI INPUT to an aumi AUv3 is host-dependent — verify per host.**
+  A MIDI-effect plugin receives played notes in `processBlock`'s MidiBuffer
+  ONLY if the host routes a MIDI source into it; many setups don't by
+  default. In AUM: the plugin needs a MIDI input assigned (the keyboard/
+  controller routed to the MIDI Processor node), which is separate from the
+  audio/MIDI *output* routing. Test the chord-input path with an actual
+  controller routed in, and don't assume "no notes arriving" is a bug in
+  the plugin — check the host routing first.
+  Threading: never read incoming MIDI on anything but the audio thread, and
+  never touch the WebView from `processBlock`. Carry events out via
+  `enkerli::MidiInputCollector` (lock-free SPSC ring; the editor timer
+  drains and emits over the bridge). Overflow drops oldest, so a dropped
+  note-off can stick — the JS held-notes tracker resyncs on an idle gap.
+  (Added with ProgGenie ChordID, 2026-06-14; on-device verification pending.)
 - **iPadOS file access**: PARTLY REHABILITATED 2026-06-12 — a
   `UIDocumentPickerViewController` (`asCopy:YES`, presented from the
   responder chain: `enkerli::importFile`) **works inside AUM's AUv3**,
