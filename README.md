@@ -49,3 +49,10 @@ xcodebuild -project build-ios/BridgePilot.xcodeproj -scheme BridgePilot_AUv3 \
 ```
 
 CC0-1.0.
+
+## Suite handoff
+
+This repo is part of the Enkerli music suite. For the whole-suite picture —
+repo map, conventions (leftmost-LSB bit order, structural spelling),
+build/validation ladders, and open queues — start at the suite handoff:
+<https://github.com/Enkerli/music-suite/blob/main/HANDOFF.md>.
