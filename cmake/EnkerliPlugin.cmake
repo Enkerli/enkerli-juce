@@ -40,6 +40,28 @@ macro(enkerli_resolve_juce)
     endif()
 endmacro()
 
+# ── clap-juce-extensions: wraps a JUCE plugin as a CLAP, on every desktop OS ──
+# CLAP is not an iOS format, so this is a no-op there. Resolved like JUCE:
+# a local checkout (submodule or -DCLAP_JUCE_PATH) wins, else FetchContent.
+# clap-juce-extensions pulls the CLAP SDK (clap + clap-helpers) itself, so no
+# extra submodules are needed in the plugin repos. Idempotent (guarded on the
+# imported target) so calling it per-plugin is safe.
+macro(enkerli_resolve_clap)
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS" AND NOT TARGET clap_juce_extensions)
+        set(CLAP_JUCE_PATH "${CMAKE_SOURCE_DIR}/clap-juce-extensions" CACHE PATH "Path to clap-juce-extensions")
+        if(EXISTS "${CLAP_JUCE_PATH}/CMakeLists.txt")
+            add_subdirectory("${CLAP_JUCE_PATH}" "${CMAKE_BINARY_DIR}/clap-juce-extensions")
+        else()
+            message(STATUS "clap-juce-extensions not found locally — fetching free-audio/clap-juce-extensions")
+            include(FetchContent)
+            FetchContent_Declare(clap-juce-extensions
+                GIT_REPOSITORY https://github.com/free-audio/clap-juce-extensions.git
+                GIT_TAG main)   # not GIT_SHALLOW: it carries the CLAP SDK as submodules
+            FetchContent_MakeAvailable(clap-juce-extensions)
+        endif()
+    endif()
+endmacro()
+
 # ── Internal: shared argument parsing + platform-split juce_add_plugin ──────
 function(_enkerli_add_plugin target archetype)
     cmake_parse_arguments(ARG ""
@@ -56,6 +78,10 @@ function(_enkerli_add_plugin target archetype)
     endif()
     if(NOT ARG_BUNDLE_ID)
         string(TOLOWER "${ARG_PRODUCT_NAME}" _lower)
+        # Bundle ids (and CLAP ids) must be reverse-DNS with no spaces; a product
+        # name like "Progression Studio" would otherwise yield the malformed
+        # "com.enkerli.progression studio" (JUCE warns, CLAP rejects). Strip them.
+        string(REPLACE " " "" _lower "${_lower}")
         set(ARG_BUNDLE_ID "com.enkerli.${_lower}")
     endif()
     if(NOT ARG_VERSION)
@@ -77,12 +103,15 @@ function(_enkerli_add_plugin target archetype)
             IS_MIDI_EFFECT          TRUE
             NEEDS_MIDI_INPUT        TRUE
             NEEDS_MIDI_OUTPUT       TRUE)
+        # CLAP standard feature set for a MIDI/note processor.
+        set(_clap_features "note-effect")
     elseif(archetype STREQUAL "instrument")
         set(_type_props
             IS_SYNTH                TRUE
             IS_MIDI_EFFECT          FALSE
             NEEDS_MIDI_INPUT        TRUE
             NEEDS_MIDI_OUTPUT       FALSE)
+        set(_clap_features "instrument" "synthesizer")
     else()
         message(FATAL_ERROR "unknown archetype ${archetype}")
     endif()
@@ -176,6 +205,17 @@ function(_enkerli_add_plugin target archetype)
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0)
+
+    # ── CLAP (macOS / Linux / Windows) — a <target>_CLAP target building the
+    #    .clap, sharing the same sources/definitions as the JUCE plugin above.
+    #    CLAP_ID must be stable (like PLUGIN_CODE, host sessions key off it);
+    #    reuse the bundle id. Skipped on iOS (not a CLAP platform).
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "iOS")
+        enkerli_resolve_clap()
+        clap_juce_extensions_plugin(TARGET ${target}
+            CLAP_ID       "${ARG_BUNDLE_ID}"
+            CLAP_FEATURES ${_clap_features})
+    endif()
 endfunction()
 
 function(enkerli_add_midi_effect_plugin target)
