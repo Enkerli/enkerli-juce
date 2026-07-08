@@ -192,9 +192,12 @@ function(_enkerli_add_plugin target archetype)
             LV2_URI                     "${ARG_LV2_URI}"
             COPY_PLUGIN_AFTER_BUILD     TRUE)
     else()
+        # Windows (and any other desktop): VST3 is THE plugin format there, so
+        # build it alongside Standalone (AU is Apple-only; LV2 is the Linux
+        # branch; CLAP is added separately below on every desktop OS).
         juce_add_plugin(${target}
             ${_base_props}
-            FORMATS                     Standalone
+            FORMATS                     VST3 Standalone
             COPY_PLUGIN_AFTER_BUILD     FALSE)
     endif()
 
