@@ -146,6 +146,21 @@ function(_enkerli_add_plugin target archetype)
         ${_type_props}
         ${_icon_props})
 
+    # Windows: JUCE_USE_WIN_WEBVIEW2 makes juce_gui_extra include <WebView2.h>,
+    # which JUCE does not vendor. Fetch the SDK (a NuGet .nupkg is just a zip)
+    # and put its headers on the include path for every target built here.
+    if(WIN32 AND NOT TARGET _enkerli_webview2)
+        include(FetchContent)
+        FetchContent_Declare(webview2
+            URL https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.2792.45
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+        FetchContent_MakeAvailable(webview2)
+        add_custom_target(_enkerli_webview2)   # guard: fetch once per build tree
+    endif()
+    if(WIN32)
+        include_directories("${webview2_SOURCE_DIR}/build/native/include")
+    endif()
+
     set(_ios_plist "")
     if(ARG_PLIST_TO_MERGE)
         set(_ios_plist PLIST_TO_MERGE "${ARG_PLIST_TO_MERGE}")
