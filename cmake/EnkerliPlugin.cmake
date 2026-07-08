@@ -137,6 +137,12 @@ function(_enkerli_add_plugin target archetype)
         # No suite plugin records audio; never trigger the mic-permission
         # dialog (it also complicates App Review).
         MICROPHONE_PERMISSION_ENABLED FALSE
+        # Every suite UI is a WebView. NEEDS_WEB_BROWSER makes JUCE link the
+        # platform web deps — WKWebView (macOS/iOS), WebView2 (Windows), and
+        # crucially webkit2gtk+gtk on Linux (else juce_gui_extra can't find
+        # gtk/gtk.h at compile). NEEDS_CURL FALSE matches JUCE_USE_CURL=0.
+        NEEDS_WEB_BROWSER           TRUE
+        NEEDS_CURL                  FALSE
         ${_type_props}
         ${_icon_props})
 
