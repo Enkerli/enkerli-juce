@@ -209,8 +209,12 @@ function(_enkerli_add_plugin target archetype)
 
     # Suite-standard compile definitions: WebView UIs on, curl/splash off,
     # and never advertise VST2 replacement (no VST2 SDK exists here).
+    # JUCE_USE_WIN_WEBVIEW2 selects the modern Edge/WebView2 backend on Windows —
+    # required for the resource-provider WebView the UIs use (Options::
+    # withResourceProvider isn't a member without it). No-op off Windows.
     target_compile_definitions(${target} PUBLIC
         JUCE_WEB_BROWSER=1
+        JUCE_USE_WIN_WEBVIEW2=1
         JUCE_USE_CURL=0
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0)
