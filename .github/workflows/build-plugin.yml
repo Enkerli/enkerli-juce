@@ -88,10 +88,14 @@ jobs:
             libglu1-mesa-dev mesa-common-dev \
             libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
 
-      # Compiler cache — only the Make (Linux) generator honours the launcher;
-      # Xcode/MSVC ignore it, so scope ccache to Linux where it actually helps.
+      # Compiler cache. macOS and Linux both configure with the Makefile
+      # generator (juceaide + the plugin build), which honours the compiler
+      # launcher — install ccache on every desktop leg so the launcher resolves
+      # (Windows' MSBuild ignores the launcher, but ccache must still exist or
+      # the flag hits "command not found"). The iOS leg uses the Xcode generator
+      # and sets no launcher.
       - name: ccache
-        if: matrix.os == 'ubuntu-latest'
+        if: ${{ !matrix.ios }}
         uses: hendrikmuhs/ccache-action@v1.2
         with:
           key: ${{ github.event.repository.name }}-${{ matrix.name }}
