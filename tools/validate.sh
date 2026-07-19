@@ -19,8 +19,17 @@ fail() { printf 'FAIL: %s\n' "$1"; exit 1; }
 
 step "macOS build (AU/VST3/Standalone)"
 cmake -B build -DCMAKE_BUILD_TYPE=Release > /dev/null || fail "cmake configure"
-cmake --build build 2>&1 | grep -E "error:" && fail "macOS build" || true
+cmake --build build 2>&1 | grep -E "error:|\[ERROR\]" && fail "macOS build" || true
 [ "${PIPESTATUS[0]}" = 0 ] || fail "macOS build"
+# A "successful" build can still leave a hollow bundle (stale WebUI DEPENDS
+# glob, interrupted assembly) — auval would then validate the previously
+# INSTALLED component and lie. Assert the fresh VST3 actually has a binary.
+shopt -s nullglob
+for _b in build/*_artefacts/Release/VST3/*.vst3; do
+    find "$_b/Contents/MacOS" -type f -size +0 2>/dev/null | grep -q . \
+        || fail "hollow bundle (no binary): $_b"
+done
+shopt -u nullglob
 
 step "iOS compile (Standalone + AUv3, unsigned)"
 cmake -B build-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0 > /dev/null || fail "iOS configure"
@@ -30,7 +39,8 @@ for SCHEME in "${TARGET}_Standalone" "${TARGET}_AUv3"; do
     xcodebuild -project "$PROJ" -scheme "$SCHEME" -configuration Release \
         -destination "generic/platform=iOS" build \
         CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO -quiet 2>&1 \
-        | grep -E "error:" && fail "iOS $SCHEME" || true
+        | grep -E "error:|\[ERROR\]" && fail "iOS $SCHEME" || true
+    [ "${PIPESTATUS[0]}" = 0 ] || fail "iOS $SCHEME (xcodebuild exit)"
 done
 
 step "auval ($TYPE $CODE Enke)"
