@@ -22,6 +22,13 @@ macro(enkerli_resolve_juce)
         find_package(JUCE CONFIG QUIET)
         if(NOT JUCE_FOUND)
             set(JUCE_PATH "${CMAKE_SOURCE_DIR}/JUCE" CACHE PATH "Path to JUCE directory")
+            # One local JUCE for every repo: probe (in order) the repo-local
+            # JUCE/ dir or -DJUCE_PATH, a JUCE_PATH environment variable
+            # (export it once on Linux — no /Applications there), and the
+            # macOS install. Only then fetch.
+            if(NOT EXISTS "${JUCE_PATH}/CMakeLists.txt" AND EXISTS "$ENV{JUCE_PATH}/CMakeLists.txt")
+                set(JUCE_PATH "$ENV{JUCE_PATH}")
+            endif()
             if(NOT EXISTS "${JUCE_PATH}/CMakeLists.txt" AND EXISTS "/Applications/JUCE/CMakeLists.txt")
                 set(JUCE_PATH "/Applications/JUCE")
             endif()
