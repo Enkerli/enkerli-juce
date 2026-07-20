@@ -29,6 +29,18 @@ as working until it has passed this ladder — "it builds" is step zero.
 enkerli-juce/tools/validate.sh <project-dir> <aumi|aumu> <CODE> [ProductName]
 ```
 
+**Across all seven plugin repos, one command** (`tools/suite-build`, added
+2026-07-20 — wraps `validate.sh` per-repo instead of memorizing seven repos'
+worth of directory/code/product combinations; also covers the Linux
+LV2/Standalone/CLAP leg validate.sh doesn't, since auval/pluginval don't
+exist there):
+```bash
+enkerli-juce/tools/suite-build <repo|all> [--ladder] [--fresh] [--ios] [--formats au,vst3,clap,lv2]
+enkerli-juce/tools/suite-build --list   # repo aliases, dirs, types, codes
+```
+`validate.sh` itself is unchanged — `suite-build --ladder` on macOS calls it
+exactly as before; this is a routing layer, not a replacement.
+
 **Rung 0 for WebView UIs — render the artifact before it ships:**
 ```bash
 swift enkerli-juce/tools/webview-smoke.swift <index.html | http://…>

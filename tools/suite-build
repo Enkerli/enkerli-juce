@@ -1,0 +1,217 @@
+#!/bin/bash
+# suite-build — one entry point for building/validating any (or all) of the
+# suite's JUCE plugin repos, instead of memorizing seven repos' worth of
+# per-repo cmake incantations (BUILD.md §4, music-suite docs/KNOWLEDGE_TRANSFER.md
+# item 2). Wraps, and does not replace, `validate.sh` — the automatable ladder
+# (macOS build → hollow-bundle check → iOS compile → auval → pluginval) stays
+# exactly as debugged there; this just knows WHICH repo needs WHICH ladder
+# arguments, and adds the Linux leg validate.sh doesn't cover.
+#
+# Usage:
+#   suite-build <repo|all> [--formats au,vst3,clap,lv2] [--ladder] [--fresh] [--ios] [--dry-run]
+#   suite-build --list
+#
+# <repo> is a manifest alias below (midicurator, proggenie, pitchfold, vane,
+# serpe, drawnqurve, workspace) or "all". Repos are found as SIBLINGS of this
+# script's enkerli-juce checkout by default (`$SUITE_ROOT/<dir>`); override
+# with `export SUITE_ROOT=/path/to/parent`. music-suite must be a sibling too
+# (or `MUSIC_SUITE` set) for the five repos whose WebUI builds from it.
+#
+#   --ladder    Run the FULL automatable ladder (macOS: validate.sh's build +
+#               hollow-bundle check + iOS compile + auval + pluginval; Linux:
+#               the LV2/Standalone/CLAP build, no auval/pluginval — unavailable
+#               there). Bare (no --ladder): a plain macOS `build` for a faster
+#               inner loop, or the Linux build (there is no "quick" Linux path
+#               distinct from the ladder — it's already just a cmake build).
+#   --formats   Best-effort target filter for the quick (non-ladder) macOS
+#               path, e.g. --formats vst3,standalone → cmake --build build
+#               --target <Product>_VST3 <Product>_Standalone. If a repo's
+#               CMake doesn't name targets exactly this way, drop --formats
+#               and let it build everything (documented per-repo naming in
+#               BUILD.md is the source of truth if this guess is wrong).
+#   --fresh     Wipe build/build-ios/build-linux first — catches the stale/
+#               hollow-bundle class of bug validate.sh's own check exists for
+#               (a "successful" incremental build can still ship old bytes).
+#   --ios       Also do the iOS unsigned compile, standalone from --ladder
+#               (e.g. you want just the compile check, not the whole ladder).
+#   --dry-run   Print every command instead of running it. Use this to sanity
+#               check a repo/flag combination before committing to a real
+#               build — especially useful on a machine you haven't run this
+#               on before.
+#
+# `all` builds every repo it can find and keeps going past one that's
+# missing or fails — a consolidation-in-progress checkout won't always have
+# every sibling yet — then prints a pass/fail summary and exits non-zero if
+# anything failed.
+#
+# Two repos (MIDIcurator, Progression Studio) commit their WebUI bundle
+# instead of building it live — the trap that shipped GloriArp two weeks
+# stale twice in July 2026. This script ALWAYS regenerates it first for those
+# two, every invocation, so that trap can't recur through this entry point.
+set -uo pipefail
+
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JUCE_REPO="$(cd "$HERE/.." && pwd)"                      # .../enkerli-juce (this script lives in its tools/)
+SUITE_ROOT="${SUITE_ROOT:-$(cd "$JUCE_REPO/.." && pwd)}" # parent of enkerli-juce, by default
+VALIDATE="$JUCE_REPO/tools/validate.sh"
+DRY_RUN=0
+
+# ── Manifest: alias -> "dir|type|code|product|prebuild|linux" ───────────────
+# type: aumi (MIDI effect) | aumu (instrument). prebuild: shell command run
+# in the repo dir before cmake, or "-" for none. linux: 1 if a build-linux
+# (LV2/Standalone/CLAP) configuration is expected to work.
+declare -A PLUGINS=(
+  [midicurator]="midicurator-plugin|aumi|Mcur|MIDIcurator|node WebUI/build.mjs ${SUITE_ROOT}/music-suite/apps/MIDIcurator|1"
+  [proggenie]="progression-studio-plugin|aumi|Prst|Progression Studio|node WebUI/build.mjs ${SUITE_ROOT}/music-suite/apps/progression-studio|1"
+  [pitchfold]="PitchFold|aumi|Pqf1|PitchFold|-|1"
+  [vane]="Vane|aumu|VAne|Vane|-|1"
+  [serpe]="rhythm_pattern_explorer|aumi|RPEd|Serpe|-|1"
+  [drawnqurve]="DrawnQurve|aumi|Dqau|DrawnQurve|-|1"
+  [workspace]="workspace-plugin|aumi|Wksp|Suite Workspace|-|1"
+)
+ORDER=(midicurator proggenie pitchfold vane serpe drawnqurve workspace)
+
+usage() {
+  sed -n '2,47p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
+  exit "${1:-0}"
+}
+
+list() {
+  printf '%-12s %-28s %-5s %-5s %s\n' ALIAS DIR TYPE CODE PRODUCT
+  for a in "${ORDER[@]}"; do
+    IFS='|' read -r dir type code product _ _ <<<"${PLUGINS[$a]}"
+    printf '%-12s %-28s %-5s %-5s %s\n' "$a" "$dir" "$type" "$code" "$product"
+  done
+  exit 0
+}
+
+# Hard-exit for argument-parsing problems, before any repo is touched.
+usage_fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
+
+run() {
+  if [ "$DRY_RUN" = 1 ]; then printf '+ %s\n' "$*"; else eval "$@"; fi
+}
+
+# Returns 1 (does NOT exit the whole script) — so `all` can keep going past
+# one repo that's absent or fails, and a single-repo invocation still exits
+# non-zero at the end via build_one's own return value.
+build_one() {
+  local alias="$1"
+  if [ -z "${PLUGINS[$alias]:-}" ]; then
+    printf 'FAIL: unknown repo alias "%s" — suite-build --list\n' "$alias" >&2
+    return 1
+  fi
+  local dir type code product prebuild linux
+  IFS='|' read -r dir type code product prebuild linux <<<"${PLUGINS[$alias]}"
+  local path="$SUITE_ROOT/$dir"
+  if [ ! -d "$path" ]; then
+    printf 'FAIL: %s: not found at %s (set SUITE_ROOT, or check it out as a sibling)\n' "$alias" "$path" >&2
+    return 1
+  fi
+
+  printf '\n=== %s (%s) ===\n' "$product" "$path"
+  (
+    # set -e HERE (not at script scope): a real (non-dry-run) command
+    # failure must stop this repo's steps immediately rather than blindly
+    # continuing to e.g. `cmake --build` a configure that never ran.
+    set -euo pipefail
+    cd "$path"
+
+    if [ "$prebuild" != "-" ]; then
+      printf -- '— WebUI regen (committed bundle: %s)\n' "$product"
+      run "$prebuild"
+    fi
+
+    if [ "$FRESH" = 1 ]; then
+      printf -- '— fresh: wiping build dirs\n'
+      run "rm -rf build build-ios build-linux build-macos build-mac"
+    fi
+
+    is_linux=0
+    [ "$(uname -s)" = "Linux" ] && is_linux=1
+
+    if [ "$is_linux" = 1 ]; then
+      if [ "$linux" != 1 ]; then
+        printf 'FAIL: %s: no Linux build documented for this repo (BUILD.md) — check by hand first\n' "$alias" >&2
+        exit 1
+      fi
+      printf -- '— Linux: LV2/Standalone/CLAP\n'
+      run "cmake -B build-linux"
+      run "cmake --build build-linux -j\$(nproc)"
+      exit 0
+    fi
+
+    # macOS.
+    if [ "$LADDER" = 1 ]; then
+      printf -- '— full ladder via validate.sh\n'
+      run "\"$VALIDATE\" \"$path\" \"$type\" \"$code\" \"$product\""
+    else
+      printf -- '— quick build (add --ladder for the full automatable ladder)\n'
+      if [ -n "$FORMATS" ]; then
+        targets=()
+        IFS=',' read -ra fs <<<"$FORMATS"
+        for f in "${fs[@]}"; do
+          case "$f" in
+            standalone) targets+=("${product// /}_Standalone") ;;
+            au)         targets+=("${product// /}_AU") ;;
+            vst3)       targets+=("${product// /}_VST3") ;;
+            clap)       targets+=("${product// /}_CLAP") ;;
+            lv2)        targets+=("${product// /}_LV2") ;;
+            *) printf 'FAIL: unknown format "%s" (au, vst3, clap, lv2, standalone)\n' "$f" >&2; exit 1 ;;
+          esac
+        done
+        run "cmake -B build -DCMAKE_BUILD_TYPE=Release"
+        run "cmake --build build --target ${targets[*]}"
+      else
+        run "cmake -B build -DCMAKE_BUILD_TYPE=Release"
+        run "cmake --build build -j 8"
+      fi
+    fi
+
+    if [ "$IOS" = 1 ] && [ "$LADDER" != 1 ]; then
+      printf -- '— iOS unsigned compile\n'
+      run "cmake -B build-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0"
+      run "cmake --build build-ios --config Release -- CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO"
+    fi
+  )
+}
+
+# ── Arg parsing ───────────────────────────────────────────────────────────
+[ $# -eq 0 ] && usage 1
+REPO=""
+FORMATS=""
+LADDER=0
+FRESH=0
+IOS=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --list) list ;;
+    --help|-h) usage 0 ;;
+    --ladder) LADDER=1 ;;
+    --fresh) FRESH=1 ;;
+    --ios) IOS=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    --formats) FORMATS="$2"; shift ;;
+    --formats=*) FORMATS="${1#--formats=}" ;;
+    -*) usage_fail "unknown flag $1 (--help for usage)" ;;
+    *) [ -z "$REPO" ] || usage_fail "one repo (or \"all\") at a time"; REPO="$1" ;;
+  esac
+  shift
+done
+[ -n "$REPO" ] || usage 1
+
+if [ "$REPO" = "all" ]; then
+  overall=0
+  results=()
+  for a in "${ORDER[@]}"; do
+    if build_one "$a"; then results+=("  OK     $a"); else results+=("  FAILED $a"); overall=1; fi
+  done
+  printf '\n— summary —\n%s\n' "$(printf '%s\n' "${results[@]}")"
+  [ "$overall" = 0 ] && printf '\nAll done.\n' || printf '\nOne or more repos failed — see above.\n'
+  exit "$overall"
+else
+  build_one "$REPO"
+  status=$?
+  [ "$status" = 0 ] && printf '\nDone.\n'
+  exit "$status"
+fi
