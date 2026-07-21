@@ -72,15 +72,27 @@ DRY_RUN=0
 # type: aumi (MIDI effect) | aumu (instrument). prebuild: shell command run
 # in the repo dir before cmake, or "-" for none. linux: 1 if a build-linux
 # (LV2/Standalone/CLAP) configuration is expected to work.
-declare -A PLUGINS=(
-  [midicurator]="midicurator-plugin|aumi|Mcur|MIDIcurator|node WebUI/build.mjs ${MUSIC_SUITE}/apps/MIDIcurator|1"
-  [proggenie]="progression-studio-plugin|aumi|Prst|Progression Studio|node WebUI/build.mjs ${MUSIC_SUITE}/apps/progression-studio|1"
-  [pitchfold]="PitchFold|aumi|Pqf1|PitchFold|-|1"
-  [vane]="Vane|aumu|VAne|Vane|-|1"
-  [serpe]="rhythm_pattern_explorer|aumi|RPEd|Serpe|-|1"
-  [drawnqurve]="DrawnQurve|aumi|Dqau|DrawnQurve|-|1"
-  [workspace]="workspace-plugin|aumi|Wksp|Suite Workspace|-|1"
-)
+#
+# A `case` lookup, not `declare -A`: this script's shebang (`#!/bin/bash`)
+# always resolves to macOS's stock `/bin/bash`, frozen at 3.2.57 (the last
+# GPLv2 release — Apple never shipped bash 4+) even when a newer bash is on
+# PATH via Homebrew. Bash 3.2 has no associative arrays; `declare -A` there
+# silently drops `-A`, and `[midicurator]=...` gets parsed as an *indexed*
+# subscript — an arithmetic expression — which under `set -u` fails as
+# "midicurator: unbound variable" (2026-07-21 field report). A `case`
+# needs nothing newer than bash 3.2.
+plugin_spec() {
+  case "$1" in
+    midicurator) printf '%s\n' "midicurator-plugin|aumi|Mcur|MIDIcurator|node WebUI/build.mjs ${MUSIC_SUITE}/apps/MIDIcurator|1" ;;
+    proggenie)   printf '%s\n' "progression-studio-plugin|aumi|Prst|Progression Studio|node WebUI/build.mjs ${MUSIC_SUITE}/apps/progression-studio|1" ;;
+    pitchfold)   printf '%s\n' "PitchFold|aumi|Pqf1|PitchFold|-|1" ;;
+    vane)        printf '%s\n' "Vane|aumu|VAne|Vane|-|1" ;;
+    serpe)       printf '%s\n' "rhythm_pattern_explorer|aumi|RPEd|Serpe|-|1" ;;
+    drawnqurve)  printf '%s\n' "DrawnQurve|aumi|Dqau|DrawnQurve|-|1" ;;
+    workspace)   printf '%s\n' "workspace-plugin|aumi|Wksp|Suite Workspace|-|1" ;;
+    *) return 1 ;;
+  esac
+}
 ORDER=(midicurator proggenie pitchfold vane serpe drawnqurve workspace)
 
 # A repo dir under SUITE_ROOT, tolerant of case: the manifest above spells
@@ -108,7 +120,7 @@ usage() {
 list() {
   printf '%-12s %-28s %-5s %-5s %s\n' ALIAS DIR TYPE CODE PRODUCT
   for a in "${ORDER[@]}"; do
-    IFS='|' read -r dir type code product _ _ <<<"${PLUGINS[$a]}"
+    IFS='|' read -r dir type code product _ _ <<<"$(plugin_spec "$a")"
     printf '%-12s %-28s %-5s %-5s %s\n' "$a" "$dir" "$type" "$code" "$product"
   done
   exit 0
@@ -126,12 +138,13 @@ run() {
 # non-zero at the end via build_one's own return value.
 build_one() {
   local alias="$1"
-  if [ -z "${PLUGINS[$alias]:-}" ]; then
+  local spec
+  if ! spec="$(plugin_spec "$alias")"; then
     printf 'FAIL: unknown repo alias "%s" — suite-build --list\n' "$alias" >&2
     return 1
   fi
   local dir type code product prebuild linux
-  IFS='|' read -r dir type code product prebuild linux <<<"${PLUGINS[$alias]}"
+  IFS='|' read -r dir type code product prebuild linux <<<"$spec"
   local path
   path="$(resolve_dir "$SUITE_ROOT" "$dir")" || {
     printf 'FAIL: %s: not found at %s (case-insensitive search also came up empty) — set SUITE_ROOT, or check it out as a sibling\n' "$alias" "$SUITE_ROOT/$dir" >&2
