@@ -8,15 +8,17 @@
 # arguments, and adds the Linux leg validate.sh doesn't cover.
 #
 # Usage:
-#   suite-build <repo|all> [--formats au,vst3,clap,lv2] [--ladder] [--fresh] [--ios] [--dry-run]
+#   suite-build <repo[,repo...]|all> [--formats au,vst3,clap,lv2] [--ladder] [--fresh] [--ios] [--dry-run]
 #   suite-build --list
 #
 # <repo> is a manifest alias below (midicurator, proggenie, pitchfold, vane,
-# serpe, drawnqurve, workspace) or "all". Repos are found as SIBLINGS of this
-# script's enkerli-juce checkout by default (`$SUITE_ROOT/<dir>`), matched
-# case-INSENSITIVELY if the exact GitHub casing (Vane, PitchFold, DrawnQurve)
-# isn't what's on disk — override the whole sibling root with
-# `export SUITE_ROOT=/path/to/parent`.
+# serpe, drawnqurve, workspace), a COMMA-separated list of aliases (e.g.
+# `drawnqurve,serpe,proggenie` — no spaces), or "all". A list of 2+ aliases
+# gets the same keep-going-and-summarize behavior as "all", just scoped to
+# those repos. Repos are found as SIBLINGS of this script's enkerli-juce
+# checkout by default (`$SUITE_ROOT/<dir>`), matched case-INSENSITIVELY if
+# the exact GitHub casing (Vane, PitchFold, DrawnQurve) isn't what's on disk
+# — override the whole sibling root with `export SUITE_ROOT=/path/to/parent`.
 #
 # music-suite is looked up separately, as `MUSIC_SUITE` (default
 # `$SUITE_ROOT/music-suite`; override with `export MUSIC_SUITE=/path/to/
@@ -26,17 +28,29 @@
 # script — see BUILD.md §4 in music-suite for their sibling/nested/
 # `MUSIC_SUITE`-env/`webui.local.cmake` probing order.
 #
+# JUCE itself is looked up once via `JUCE_PATH` (default `$SUITE_ROOT/JUCE`;
+# override with `export JUCE_PATH=/path/to/JUCE`) so all seven repos share
+# ONE local JUCE checkout instead of each `FetchContent`-ing (and building)
+# its own ~500MB copy — clone juce-framework/JUCE as an eighth sibling once
+# and this just works. Same for CLAP: `CLAP_JUCE_PATH` is the analogous
+# override, checked per-repo (`$repo/clap-juce-extensions` by default) since
+# it isn't spread across repos the way JUCE_PATH is.
+#
 #   --ladder    Run the FULL automatable ladder (macOS: validate.sh's build +
 #               hollow-bundle check + iOS compile + auval + pluginval; Linux:
 #               the LV2/Standalone/CLAP build, no auval/pluginval — unavailable
 #               there). Bare (no --ladder): a plain macOS `build` for a faster
 #               inner loop, or the Linux build (there is no "quick" Linux path
 #               distinct from the ladder — it's already just a cmake build).
-#   --formats   Best-effort target filter for the quick (non-ladder) macOS
-#               path, e.g. --formats vst3,standalone → cmake --build build
-#               --target <Product>_VST3 <Product>_Standalone. If a repo's
-#               CMake doesn't name targets exactly this way, drop --formats
-#               and let it build everything (documented per-repo naming in
+#   --formats   Target filter, e.g. --formats vst3,clap → cmake --build
+#               --target <Product>_VST3 <Product>_CLAP. Works on the quick
+#               (non-ladder) macOS path AND the Linux path (Linux only has
+#               standalone/lv2/clap — there's no au/vst3 build there, by
+#               design: VST3 is the Windows/macOS format in this build
+#               system, LV2 is Linux's). Has no effect under --ladder —
+#               validate.sh's ladder is a fixed sequence. If a repo's CMake
+#               doesn't name targets exactly this way, drop --formats and
+#               let it build everything (documented per-repo naming in
 #               BUILD.md is the source of truth if this guess is wrong).
 #   --fresh     Wipe build/build-ios/build-linux first — catches the stale/
 #               hollow-bundle class of bug validate.sh's own check exists for
@@ -48,10 +62,10 @@
 #               build — especially useful on a machine you haven't run this
 #               on before.
 #
-# `all` builds every repo it can find and keeps going past one that's
-# missing or fails — a consolidation-in-progress checkout won't always have
-# every sibling yet — then prints a pass/fail summary and exits non-zero if
-# anything failed.
+# `all` (or a comma-separated repo list) builds every repo it can find and
+# keeps going past one that's missing or fails — a consolidation-in-progress
+# checkout won't always have every sibling yet — then prints a pass/fail
+# summary and exits non-zero if anything failed.
 #
 # Two repos (MIDIcurator, Progression Studio) commit their WebUI bundle
 # instead of building it live — the trap that shipped GloriArp two weeks
@@ -65,6 +79,8 @@ SUITE_ROOT="${SUITE_ROOT:-$(cd "$JUCE_REPO/.." && pwd)}" # parent of enkerli-juc
 MUSIC_SUITE="${MUSIC_SUITE:-$SUITE_ROOT/music-suite}"    # now actually read (2026-07-21 — the usage text
                                                           # promised this override for a while before the
                                                           # code did anything with it)
+JUCE_PATH="${JUCE_PATH:-$SUITE_ROOT/JUCE}"               # one shared local JUCE for all seven repos (2026-07-21)
+export JUCE_PATH                                         # enkerli_resolve_juce() (EnkerliPlugin.cmake) reads this
 VALIDATE="$JUCE_REPO/tools/validate.sh"
 DRY_RUN=0
 
@@ -113,8 +129,25 @@ resolve_dir() {
 }
 
 usage() {
-  sed -n '2,47p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
+  sed -n '2,58p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
   exit "${1:-0}"
+}
+
+# Maps one --formats token to this repo's cmake target name. Shared by the
+# macOS quick-build path and the Linux path (Linux only ever has standalone/
+# lv2/clap targets to actually pick from — asking for au/vst3 there just
+# gets a "target not found" from cmake itself, which is clear enough).
+# Returns 1 (no output) for an unrecognized token; caller reports it.
+format_target() {
+  local product="$1" fmt="$2"
+  case "$fmt" in
+    standalone) printf '%s\n' "${product// /}_Standalone" ;;
+    au)         printf '%s\n' "${product// /}_AU" ;;
+    vst3)       printf '%s\n' "${product// /}_VST3" ;;
+    clap)       printf '%s\n' "${product// /}_CLAP" ;;
+    lv2)        printf '%s\n' "${product// /}_LV2" ;;
+    *) return 1 ;;
+  esac
 }
 
 list() {
@@ -153,11 +186,17 @@ build_one() {
 
   printf '\n=== %s (%s) ===\n' "$product" "$path"
   (
-    # set -e HERE (not at script scope): a real (non-dry-run) command
-    # failure must stop this repo's steps immediately rather than blindly
-    # continuing to e.g. `cmake --build` a configure that never ran.
+    # set -e HERE (not at script scope) is defense-in-depth, not the actual
+    # failure mechanism: when this whole subshell is invoked as `if build_one
+    # ...; then` (every "all"/multi-repo run), bash SUPPRESSES errexit for
+    # the entire compound command being tested — including in here, even
+    # though this is its own subshell (a real 2026-07-21 field report: a
+    # cmake --build failure printed its error but the summary still said
+    # "OK", because nothing downstream of the failure ever re-checked $?).
+    # So every step below that must be fatal checks its own exit status
+    # explicitly via `|| exit 1` — never relying on implicit -e propagation.
     set -euo pipefail
-    cd "$path"
+    cd "$path" || exit 1
 
     if [ "$prebuild" != "-" ]; then
       if [ ! -d "$MUSIC_SUITE" ]; then
@@ -165,12 +204,12 @@ build_one() {
         exit 1
       fi
       printf -- '— WebUI regen (committed bundle: %s)\n' "$product"
-      run "$prebuild"
+      run "$prebuild" || exit 1
     fi
 
     if [ "$FRESH" = 1 ]; then
       printf -- '— fresh: wiping build dirs\n'
-      run "rm -rf build build-ios build-linux build-macos build-mac"
+      run "rm -rf build build-ios build-linux build-macos build-mac" || exit 1
     fi
 
     is_linux=0
@@ -181,43 +220,66 @@ build_one() {
         printf 'FAIL: %s: no Linux build documented for this repo (BUILD.md) — check by hand first\n' "$alias" >&2
         exit 1
       fi
-      printf -- '— Linux: LV2/Standalone/CLAP\n'
-      run "cmake -B build-linux"
-      run "cmake --build build-linux -j\$(nproc)"
+      run "cmake -B build-linux" || exit 1
+
+      # The LV2 target's manifest step runs the built plugin headlessly to
+      # introspect it; without a display that can crash (Gtk "cannot open
+      # display" / SIGPIPE — a real 2026-07-21 field report). xvfb-run gives
+      # it a throwaway virtual one; Standalone/CLAP don't need this at all.
+      XVFB=""
+      if command -v xvfb-run >/dev/null 2>&1; then
+        XVFB="xvfb-run -a"
+      else
+        printf 'NOTE: xvfb-run not found (apt/dnf/pacman package "xvfb") — if the\n      LV2 target fails below with "cannot open display" or a SIGPIPE\n      (exit 141), that'"'"'s why; Standalone and CLAP are unaffected.\n' >&2
+      fi
+
+      if [ -n "$FORMATS" ]; then
+        targets=()
+        IFS=',' read -ra fs <<<"$FORMATS"
+        for f in "${fs[@]}"; do
+          t="$(format_target "$product" "$f")" || {
+            printf 'FAIL: unknown format "%s" (standalone, lv2, clap — no au/vst3 on Linux)\n' "$f" >&2
+            exit 1
+          }
+          targets+=("$t")
+        done
+        printf -- '— Linux: %s\n' "$FORMATS"
+        run "$XVFB cmake --build build-linux -j\$(nproc) --target ${targets[*]}" || exit 1
+      else
+        printf -- '— Linux: LV2/Standalone/CLAP\n'
+        run "$XVFB cmake --build build-linux -j\$(nproc)" || exit 1
+      fi
       exit 0
     fi
 
     # macOS.
     if [ "$LADDER" = 1 ]; then
       printf -- '— full ladder via validate.sh\n'
-      run "\"$VALIDATE\" \"$path\" \"$type\" \"$code\" \"$product\""
+      run "\"$VALIDATE\" \"$path\" \"$type\" \"$code\" \"$product\"" || exit 1
     else
       printf -- '— quick build (add --ladder for the full automatable ladder)\n'
       if [ -n "$FORMATS" ]; then
         targets=()
         IFS=',' read -ra fs <<<"$FORMATS"
         for f in "${fs[@]}"; do
-          case "$f" in
-            standalone) targets+=("${product// /}_Standalone") ;;
-            au)         targets+=("${product// /}_AU") ;;
-            vst3)       targets+=("${product// /}_VST3") ;;
-            clap)       targets+=("${product// /}_CLAP") ;;
-            lv2)        targets+=("${product// /}_LV2") ;;
-            *) printf 'FAIL: unknown format "%s" (au, vst3, clap, lv2, standalone)\n' "$f" >&2; exit 1 ;;
-          esac
+          t="$(format_target "$product" "$f")" || {
+            printf 'FAIL: unknown format "%s" (au, vst3, clap, lv2, standalone)\n' "$f" >&2
+            exit 1
+          }
+          targets+=("$t")
         done
-        run "cmake -B build -DCMAKE_BUILD_TYPE=Release"
-        run "cmake --build build --target ${targets[*]}"
+        run "cmake -B build -DCMAKE_BUILD_TYPE=Release" || exit 1
+        run "cmake --build build --target ${targets[*]}" || exit 1
       else
-        run "cmake -B build -DCMAKE_BUILD_TYPE=Release"
-        run "cmake --build build -j 8"
+        run "cmake -B build -DCMAKE_BUILD_TYPE=Release" || exit 1
+        run "cmake --build build -j 8" || exit 1
       fi
     fi
 
     if [ "$IOS" = 1 ] && [ "$LADDER" != 1 ]; then
       printf -- '— iOS unsigned compile\n'
-      run "cmake -B build-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0"
-      run "cmake --build build-ios --config Release -- CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO"
+      run "cmake -B build-ios -G Xcode -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_OSX_DEPLOYMENT_TARGET=16.0" || exit 1
+      run "cmake --build build-ios --config Release -- CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO" || exit 1
     fi
   )
 }
@@ -240,23 +302,29 @@ while [ $# -gt 0 ]; do
     --formats) FORMATS="$2"; shift ;;
     --formats=*) FORMATS="${1#--formats=}" ;;
     -*) usage_fail "unknown flag $1 (--help for usage)" ;;
-    *) [ -z "$REPO" ] || usage_fail "one repo (or \"all\") at a time"; REPO="$1" ;;
+    *) [ -z "$REPO" ] || usage_fail "one repo, comma-list, or \"all\" at a time"; REPO="$1" ;;
   esac
   shift
 done
 [ -n "$REPO" ] || usage 1
 
 if [ "$REPO" = "all" ]; then
+  SELECTED=("${ORDER[@]}")
+else
+  IFS=',' read -ra SELECTED <<<"$REPO"   # a bare alias is just a 1-element list
+fi
+
+if [ "${#SELECTED[@]}" -gt 1 ]; then
   overall=0
   results=()
-  for a in "${ORDER[@]}"; do
+  for a in "${SELECTED[@]}"; do
     if build_one "$a"; then results+=("  OK     $a"); else results+=("  FAILED $a"); overall=1; fi
   done
   printf '\n— summary —\n%s\n' "$(printf '%s\n' "${results[@]}")"
   [ "$overall" = 0 ] && printf '\nAll done.\n' || printf '\nOne or more repos failed — see above.\n'
   exit "$overall"
 else
-  build_one "$REPO"
+  build_one "${SELECTED[0]}"
   status=$?
   [ "$status" = 0 ] && printf '\nDone.\n'
   exit "$status"
