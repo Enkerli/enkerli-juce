@@ -13,9 +13,18 @@
 #
 # <repo> is a manifest alias below (midicurator, proggenie, pitchfold, vane,
 # serpe, drawnqurve, workspace) or "all". Repos are found as SIBLINGS of this
-# script's enkerli-juce checkout by default (`$SUITE_ROOT/<dir>`); override
-# with `export SUITE_ROOT=/path/to/parent`. music-suite must be a sibling too
-# (or `MUSIC_SUITE` set) for the five repos whose WebUI builds from it.
+# script's enkerli-juce checkout by default (`$SUITE_ROOT/<dir>`), matched
+# case-INSENSITIVELY if the exact GitHub casing (Vane, PitchFold, DrawnQurve)
+# isn't what's on disk — override the whole sibling root with
+# `export SUITE_ROOT=/path/to/parent`.
+#
+# music-suite is looked up separately, as `MUSIC_SUITE` (default
+# `$SUITE_ROOT/music-suite`; override with `export MUSIC_SUITE=/path/to/
+# music-suite`) — only consulted for midicurator/proggenie's WebUI-regen
+# prebuild step. The OTHER five repos (pitchfold, vane, serpe, drawnqurve,
+# workspace) find music-suite themselves at CMake time, independent of this
+# script — see BUILD.md §4 in music-suite for their sibling/nested/
+# `MUSIC_SUITE`-env/`webui.local.cmake` probing order.
 #
 #   --ladder    Run the FULL automatable ladder (macOS: validate.sh's build +
 #               hollow-bundle check + iOS compile + auval + pluginval; Linux:
@@ -53,6 +62,9 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JUCE_REPO="$(cd "$HERE/.." && pwd)"                      # .../enkerli-juce (this script lives in its tools/)
 SUITE_ROOT="${SUITE_ROOT:-$(cd "$JUCE_REPO/.." && pwd)}" # parent of enkerli-juce, by default
+MUSIC_SUITE="${MUSIC_SUITE:-$SUITE_ROOT/music-suite}"    # now actually read (2026-07-21 — the usage text
+                                                          # promised this override for a while before the
+                                                          # code did anything with it)
 VALIDATE="$JUCE_REPO/tools/validate.sh"
 DRY_RUN=0
 
@@ -61,8 +73,8 @@ DRY_RUN=0
 # in the repo dir before cmake, or "-" for none. linux: 1 if a build-linux
 # (LV2/Standalone/CLAP) configuration is expected to work.
 declare -A PLUGINS=(
-  [midicurator]="midicurator-plugin|aumi|Mcur|MIDIcurator|node WebUI/build.mjs ${SUITE_ROOT}/music-suite/apps/MIDIcurator|1"
-  [proggenie]="progression-studio-plugin|aumi|Prst|Progression Studio|node WebUI/build.mjs ${SUITE_ROOT}/music-suite/apps/progression-studio|1"
+  [midicurator]="midicurator-plugin|aumi|Mcur|MIDIcurator|node WebUI/build.mjs ${MUSIC_SUITE}/apps/MIDIcurator|1"
+  [proggenie]="progression-studio-plugin|aumi|Prst|Progression Studio|node WebUI/build.mjs ${MUSIC_SUITE}/apps/progression-studio|1"
   [pitchfold]="PitchFold|aumi|Pqf1|PitchFold|-|1"
   [vane]="Vane|aumu|VAne|Vane|-|1"
   [serpe]="rhythm_pattern_explorer|aumi|RPEd|Serpe|-|1"
@@ -70,6 +82,23 @@ declare -A PLUGINS=(
   [workspace]="workspace-plugin|aumi|Wksp|Suite Workspace|-|1"
 )
 ORDER=(midicurator proggenie pitchfold vane serpe drawnqurve workspace)
+
+# A repo dir under SUITE_ROOT, tolerant of case: the manifest above spells
+# each dir with its real GitHub casing (Vane, PitchFold, DrawnQurve), but a
+# clone can easily end up lowercase (a case-insensitive host filesystem, a
+# script that normalized it, a manual `git clone ... vane`) — Linux itself
+# is case-sensitive, so that mismatch used to be a hard FAIL even though the
+# repo was right there. Exact match wins when present (no filesystem scan);
+# otherwise one case-insensitive `find` at SUITE_ROOT's top level. Echoes
+# nothing and returns 1 if neither exists — callers do their own reporting.
+resolve_dir() {
+  local root="$1" dir="$2"
+  if [ -d "$root/$dir" ]; then printf '%s\n' "$root/$dir"; return 0; fi
+  local found
+  found="$(find "$root" -maxdepth 1 -iname "$dir" -type d 2>/dev/null | head -1)"
+  [ -n "$found" ] && { printf '%s\n' "$found"; return 0; }
+  return 1
+}
 
 usage() {
   sed -n '2,47p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
@@ -103,11 +132,11 @@ build_one() {
   fi
   local dir type code product prebuild linux
   IFS='|' read -r dir type code product prebuild linux <<<"${PLUGINS[$alias]}"
-  local path="$SUITE_ROOT/$dir"
-  if [ ! -d "$path" ]; then
-    printf 'FAIL: %s: not found at %s (set SUITE_ROOT, or check it out as a sibling)\n' "$alias" "$path" >&2
+  local path
+  path="$(resolve_dir "$SUITE_ROOT" "$dir")" || {
+    printf 'FAIL: %s: not found at %s (case-insensitive search also came up empty) — set SUITE_ROOT, or check it out as a sibling\n' "$alias" "$SUITE_ROOT/$dir" >&2
     return 1
-  fi
+  }
 
   printf '\n=== %s (%s) ===\n' "$product" "$path"
   (
@@ -118,6 +147,10 @@ build_one() {
     cd "$path"
 
     if [ "$prebuild" != "-" ]; then
+      if [ ! -d "$MUSIC_SUITE" ]; then
+        printf 'FAIL: %s: music-suite not found at %s — set MUSIC_SUITE, or check it out as a sibling named "music-suite"\n' "$alias" "$MUSIC_SUITE" >&2
+        exit 1
+      fi
       printf -- '— WebUI regen (committed bundle: %s)\n' "$product"
       run "$prebuild"
     fi
