@@ -214,9 +214,15 @@ function(_enkerli_add_plugin target archetype)
         if(NOT ARG_LV2_URI)
             set(ARG_LV2_URI "https://enkerli.com/plugins/${target}")
         endif()
+        # VST3 is a first-class Linux format (Bitwig, Reaper, Ardour, Qtractor
+        # all load Linux VST3) and the suite's pre-consolidation Linux builds
+        # shipped it — JUCE builds it with no extra SDK, and these plugins
+        # already link WebKitGTK for the Standalone/LV2 WebView, so VST3 adds
+        # no new dependency. LV2 stays alongside it (the native Linux format);
+        # CLAP is added separately below.
         juce_add_plugin(${target}
             ${_base_props}
-            FORMATS                     LV2 Standalone
+            FORMATS                     LV2 VST3 Standalone
             LV2_URI                     "${ARG_LV2_URI}"
             COPY_PLUGIN_AFTER_BUILD     TRUE)
     else()

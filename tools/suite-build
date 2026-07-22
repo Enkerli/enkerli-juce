@@ -38,20 +38,22 @@
 #
 #   --ladder    Run the FULL automatable ladder (macOS: validate.sh's build +
 #               hollow-bundle check + iOS compile + auval + pluginval; Linux:
-#               the LV2/Standalone/CLAP build, no auval/pluginval — unavailable
+#               the LV2/VST3/CLAP/Standalone build, no auval/pluginval — unavailable
 #               there). Bare (no --ladder): a plain macOS `build` for a faster
 #               inner loop, or the Linux build (there is no "quick" Linux path
 #               distinct from the ladder — it's already just a cmake build).
 #   --formats   Target filter, e.g. --formats vst3,clap → cmake --build
 #               --target <Product>_VST3 <Product>_CLAP. Works on the quick
-#               (non-ladder) macOS path AND the Linux path (Linux only has
-#               standalone/lv2/clap — there's no au/vst3 build there, by
-#               design: VST3 is the Windows/macOS format in this build
-#               system, LV2 is Linux's). Has no effect under --ladder —
-#               validate.sh's ladder is a fixed sequence. If a repo's CMake
-#               doesn't name targets exactly this way, drop --formats and
-#               let it build everything (documented per-repo naming in
-#               BUILD.md is the source of truth if this guess is wrong).
+#               (non-ladder) macOS path AND the Linux path. Available formats
+#               are platform-dependent: macOS builds au/vst3/clap/standalone,
+#               Linux builds lv2/vst3/clap/standalone (no au — that's
+#               Apple-only). Asking for a format the platform doesn't build
+#               just gets a "target not found" from cmake. Has no effect
+#               under --ladder — validate.sh's ladder is a fixed sequence. If
+#               a repo's CMake doesn't name targets exactly this way, drop
+#               --formats and let it build everything (documented per-repo
+#               naming in BUILD.md is the source of truth if this guess is
+#               wrong).
 #   --fresh     Wipe build/build-ios/build-linux first — catches the stale/
 #               hollow-bundle class of bug validate.sh's own check exists for
 #               (a "successful" incremental build can still ship old bytes).
@@ -238,7 +240,7 @@ build_one() {
         IFS=',' read -ra fs <<<"$FORMATS"
         for f in "${fs[@]}"; do
           t="$(format_target "$product" "$f")" || {
-            printf 'FAIL: unknown format "%s" (standalone, lv2, clap — no au/vst3 on Linux)\n' "$f" >&2
+            printf 'FAIL: unknown format "%s" (Linux builds: lv2, vst3, clap, standalone — no au)\n' "$f" >&2
             exit 1
           }
           targets+=("$t")
@@ -246,7 +248,7 @@ build_one() {
         printf -- '— Linux: %s\n' "$FORMATS"
         run "$XVFB cmake --build build-linux -j\$(nproc) --target ${targets[*]}" || exit 1
       else
-        printf -- '— Linux: LV2/Standalone/CLAP\n'
+        printf -- '— Linux: LV2/VST3/CLAP/Standalone\n'
         run "$XVFB cmake --build build-linux -j\$(nproc)" || exit 1
       fi
       exit 0

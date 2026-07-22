@@ -57,6 +57,14 @@ for PLUGIN in build/*_artefacts/Release/VST3/*.vst3; do
     echo "PASS $(basename "$PLUGIN")"
 done
 if [ -n "$PRODUCT" ] && [ -d "$HOME/Library/Audio/Plug-Ins/Components/$PRODUCT.component" ]; then
+    # Nudge the AudioComponent registry before the scan, same as before auval
+    # above: right after a fresh install the registry can still be stale, and
+    # pluginval then reports "Num plugins found: 0" (an empty scan, NOT a
+    # plugin defect) even though auval — which forced this same refresh —
+    # just passed. Refreshing here removes that race at its source. If
+    # pluginval STILL finds nothing after this, that's a real failure and
+    # `fail` reports it — we never silently pass a rung that didn't run.
+    killall -9 AudioComponentRegistrar 2>/dev/null
     "$PV" --strictness-level 8 --validate-in-process --skip-gui-tests \
         --timeout-ms 120000 "$HOME/Library/Audio/Plug-Ins/Components/$PRODUCT.component" > /tmp/pv.log 2>&1 \
         || { tail -20 /tmp/pv.log; fail "pluginval AU"; }
