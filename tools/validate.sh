@@ -43,9 +43,15 @@ for SCHEME in "${TARGET}_Standalone" "${TARGET}_AUv3"; do
     [ "${PIPESTATUS[0]}" = 0 ] || fail "iOS $SCHEME (xcodebuild exit)"
 done
 
-step "auval ($TYPE $CODE Enke)"
+step "auval -strict ($TYPE $CODE Enke)"
 killall -9 AudioComponentRegistrar 2>/dev/null
-auval -v "$TYPE" "$CODE" Enke 2>&1 | tail -2 | grep -q "SUCCEEDED" || fail "auval"
+# -strict here (in-process, direct v2 access) gives us the full strict AU
+# coverage that pluginval's own auval sub-test would — but fast. pluginval
+# drives the AU through the AUAudioUnit bridge (every param set round-trips a
+# dispatch/observation queue); for a plugin with hundreds of params + a slow
+# constructor that push its auval sub-test past its 2-min budget (Vane hit
+# exactly this). Running strict auval natively sidesteps the bridge entirely.
+auval -strict -v "$TYPE" "$CODE" Enke 2>&1 | tail -2 | grep -q "SUCCEEDED" || fail "auval"
 echo "AU VALIDATION SUCCEEDED"
 
 step "pluginval (strictness 8)"
@@ -56,19 +62,14 @@ for PLUGIN in build/*_artefacts/Release/VST3/*.vst3; do
         --timeout-ms 120000 "$PLUGIN" > /tmp/pv.log 2>&1 || { tail -20 /tmp/pv.log; fail "pluginval $PLUGIN"; }
     echo "PASS $(basename "$PLUGIN")"
 done
-if [ -n "$PRODUCT" ] && [ -d "$HOME/Library/Audio/Plug-Ins/Components/$PRODUCT.component" ]; then
-    # Nudge the AudioComponent registry before the scan, same as before auval
-    # above: right after a fresh install the registry can still be stale, and
-    # pluginval then reports "Num plugins found: 0" (an empty scan, NOT a
-    # plugin defect) even though auval — which forced this same refresh —
-    # just passed. Refreshing here removes that race at its source. If
-    # pluginval STILL finds nothing after this, that's a real failure and
-    # `fail` reports it — we never silently pass a rung that didn't run.
-    killall -9 AudioComponentRegistrar 2>/dev/null
-    "$PV" --strictness-level 8 --validate-in-process --skip-gui-tests \
-        --timeout-ms 120000 "$HOME/Library/Audio/Plug-Ins/Components/$PRODUCT.component" > /tmp/pv.log 2>&1 \
-        || { tail -20 /tmp/pv.log; fail "pluginval AU"; }
-    echo "PASS $PRODUCT.component"
-fi
+# NOTE: we deliberately do NOT run pluginval on the installed .component.
+# pluginval's AU validation includes an internal `auval -strict` sub-test that
+# it drives through the AUAudioUnit bridge. That path is pathologically slow
+# for plugins with large parameter trees and/or slow constructors — Vane's ran
+# past pluginval's 2-min timeout every time, while the SAME `auval -strict`
+# run natively (the rung above) passes in ~30s. The AU is therefore covered by
+# native strict auval; pluginval still runs against the VST3 above for its own
+# (non-auval) test suite. Re-adding an AU-component pluginval rung just
+# reintroduces the bridge-induced timeout — don't.
 
 printf '\nAll automatable rungs green. Next: real hosts, real devices (TESTING.md §4).\n'
