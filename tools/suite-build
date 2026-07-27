@@ -88,16 +88,35 @@ if [ -z "${MUSIC_SUITE:-}" ]; then
   else MUSIC_SUITE="$SUITE_ROOT/music-suite"; fi   # keep the old path for the error message
 fi
 export MUSIC_SUITE                                 # the five CMake-side repos probe this too
-JUCE_PATH="${JUCE_PATH:-$SUITE_ROOT/JUCE}"               # one shared local JUCE for all seven repos (2026-07-21)
+# One shared local JUCE for all seven repos (2026-07-21). Resolve it the same
+# way the CMake side does — shared checkout, then the macOS install — instead
+# of exporting a path that may not exist: an unset-but-exported JUCE_PATH still
+# "worked" (cmake fell through to /Applications/JUCE on its own) while leaving
+# this script unable to reason about WHICH JUCE a build actually used, which is
+# what the stale-cache check below needs to know (2026-07-27).
+if [ -z "${JUCE_PATH:-}" ]; then
+  if   [ -f "$SUITE_ROOT/JUCE/CMakeLists.txt" ]; then JUCE_PATH="$SUITE_ROOT/JUCE"
+  elif [ -f /Applications/JUCE/CMakeLists.txt ]; then JUCE_PATH=/Applications/JUCE
+  else JUCE_PATH="$SUITE_ROOT/JUCE"; fi   # nonexistent: repos will FetchContent, and say so
+fi
 export JUCE_PATH                                         # enkerli_resolve_juce() (EnkerliPlugin.cmake) reads this
 VALIDATE="$JUCE_REPO/tools/validate.sh"
 JOBS="$( (sysctl -n hw.ncpu || nproc) 2>/dev/null || echo 4 )"  # macOS has no nproc
 DRY_RUN=0
 
-# ── Manifest: alias -> "dir|type|code|product|prebuild|linux" ───────────────
+# ── Manifest: alias -> "dir|type|code|target|prebuild|linux" ───────────────
 # type: aumi (MIDI effect) | aumu (instrument). prebuild: shell command run
 # in the repo dir before cmake, or "-" for none. linux: 1 if a build-linux
 # (LV2/Standalone/CLAP) configuration is expected to work.
+#
+# The 4th field is the **CMake target base name** (what --formats appends
+# _AU/_VST3/… to), NOT the marketing product name — they differ in two repos
+# and both were wrong until 2026-07-27, silently, because a bare build never
+# names a target:
+#   · DrawnQurve's target is "DrawnCurve" — a historical rename BUILD.md says
+#     is too entangled to undo (PRODUCT_NAME is still "DrawnQurve");
+#   · workspace-plugin's target is "Workspace", PRODUCT_NAME "Suite Workspace"
+#     (the old space-stripping guess produced "SuiteWorkspace").
 #
 # A `case` lookup, not `declare -A`: this script's shebang (`#!/bin/bash`)
 # always resolves to macOS's stock `/bin/bash`, frozen at 3.2.57 (the last
@@ -114,8 +133,8 @@ plugin_spec() {
     pitchfold)   printf '%s\n' "PitchFold|aumi|Pqf1|PitchFold|-|1" ;;
     vane)        printf '%s\n' "Vane|aumu|VAne|Vane|-|1" ;;
     serpe)       printf '%s\n' "rhythm_pattern_explorer|aumi|RPEd|Serpe|-|1" ;;
-    drawnqurve)  printf '%s\n' "DrawnQurve|aumi|Dqau|DrawnQurve|-|1" ;;
-    workspace)   printf '%s\n' "workspace-plugin|aumi|Wksp|Suite Workspace|-|1" ;;
+    drawnqurve)  printf '%s\n' "DrawnQurve|aumi|Dqau|DrawnCurve|-|1" ;;
+    workspace)   printf '%s\n' "workspace-plugin|aumi|Wksp|Workspace|-|1" ;;
     *) return 1 ;;
   esac
 }
@@ -188,8 +207,31 @@ filter_targets() {
   printf '%s\n' "${keep[@]:-}"
 }
 
+# A build dir configured when the repo fetched its OWN JUCE cannot be reused
+# once a shared JUCE_PATH exists: JUCE's nested helper sub-builds (vst3_helper,
+# juce tools) keep the old source path in their own CMakeCache, and cmake hard-
+# errors with "does not match the source ... used to generate cache". Every
+# repo hits this exactly once, on the first shared-JUCE build (both Vane and
+# DrawnQurve did, 2026-07-27). Detect it and regenerate rather than hand the
+# user a cmake error whose fix (--fresh) it never mentions.
+juce_cache_stale() {
+  local b="$1"
+  [ -d "$b" ] || return 1
+  [ -n "${JUCE_PATH:-}" ] && [ -f "$JUCE_PATH/CMakeLists.txt" ] || return 1
+  grep -rq "_deps/juce-src" "$b" --include=CMakeCache.txt 2>/dev/null
+}
+drop_stale_juce_cache() {   # $@ = build dirs
+  local b
+  for b in "$@"; do
+    if juce_cache_stale "$b"; then
+      printf -- '— %s was configured against a privately fetched JUCE; regenerating it against %s\n' "$b" "$JUCE_PATH"
+      run "rm -rf \"$b\"" || return 1
+    fi
+  done
+}
+
 list() {
-  printf '%-12s %-28s %-5s %-5s %s\n' ALIAS DIR TYPE CODE PRODUCT
+  printf '%-12s %-28s %-5s %-5s %s\n' ALIAS DIR TYPE CODE TARGET
   for a in "${ORDER[@]}"; do
     IFS='|' read -r dir type code product _ _ <<<"$(plugin_spec "$a")"
     printf '%-12s %-28s %-5s %-5s %s\n' "$a" "$dir" "$type" "$code" "$product"
@@ -258,6 +300,7 @@ build_one() {
         printf 'FAIL: %s: no Linux build documented for this repo (BUILD.md) — check by hand first\n' "$alias" >&2
         exit 1
       fi
+      drop_stale_juce_cache build-linux || exit 1
       run "cmake -B build-linux" || exit 1
 
       # The LV2 target's manifest step runs the built plugin headlessly to
@@ -297,6 +340,7 @@ build_one() {
     fi
 
     # macOS.
+    drop_stale_juce_cache build build-ios || exit 1
     if [ "$LADDER" = 1 ]; then
       printf -- '— full ladder via validate.sh\n'
       run "\"$VALIDATE\" \"$path\" \"$type\" \"$code\" \"$product\"" || exit 1
