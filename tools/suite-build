@@ -8,7 +8,7 @@
 # arguments, and adds the Linux leg validate.sh doesn't cover.
 #
 # Usage:
-#   suite-build <repo[,repo...]|all> [--formats au,vst3,clap,lv2] [--ladder] [--fresh] [--ios] [--dry-run]
+#   suite-build <repo[,repo...]|all> [--formats au,auv3,vst3,clap,lv2] [--ladder] [--fresh] [--ios] [--no-node] [--dry-run]
 #   suite-build --list
 #
 # <repo> is a manifest alias below (midicurator, proggenie, pitchfold, vane,
@@ -45,7 +45,7 @@
 #   --formats   Target filter, e.g. --formats vst3,clap → cmake --build
 #               --target <Product>_VST3 <Product>_CLAP. Works on the quick
 #               (non-ladder) macOS path AND the Linux path. Available formats
-#               are platform-dependent: macOS builds au/vst3/clap/standalone,
+#               are platform-dependent: macOS builds au/auv3/vst3/clap/standalone,
 #               Linux builds lv2/vst3/clap/standalone (no au — that's
 #               Apple-only). Asking for a format the platform doesn't build
 #               just gets a "target not found" from cmake. Has no effect
@@ -78,12 +78,20 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 JUCE_REPO="$(cd "$HERE/.." && pwd)"                      # .../enkerli-juce (this script lives in its tools/)
 SUITE_ROOT="${SUITE_ROOT:-$(cd "$JUCE_REPO/.." && pwd)}" # parent of enkerli-juce, by default
-MUSIC_SUITE="${MUSIC_SUITE:-$SUITE_ROOT/music-suite}"    # now actually read (2026-07-21 — the usage text
-                                                          # promised this override for a while before the
-                                                          # code did anything with it)
+# Two layouts are supported (BUILD.md §4.0): repos as SIBLINGS of music-suite
+# (the default), or repos NESTED inside the music-suite checkout — in which
+# case SUITE_ROOT already IS music-suite and "$SUITE_ROOT/music-suite" would
+# not exist. Detect that rather than failing with a confusing "not found".
+if [ -z "${MUSIC_SUITE:-}" ]; then
+  if [ -f "$SUITE_ROOT/music-suite/package.json" ]; then MUSIC_SUITE="$SUITE_ROOT/music-suite"
+  elif [ -f "$SUITE_ROOT/package.json" ] && [ -d "$SUITE_ROOT/apps" ]; then MUSIC_SUITE="$SUITE_ROOT"
+  else MUSIC_SUITE="$SUITE_ROOT/music-suite"; fi   # keep the old path for the error message
+fi
+export MUSIC_SUITE                                 # the five CMake-side repos probe this too
 JUCE_PATH="${JUCE_PATH:-$SUITE_ROOT/JUCE}"               # one shared local JUCE for all seven repos (2026-07-21)
 export JUCE_PATH                                         # enkerli_resolve_juce() (EnkerliPlugin.cmake) reads this
 VALIDATE="$JUCE_REPO/tools/validate.sh"
+JOBS="$( (sysctl -n hw.ncpu || nproc) 2>/dev/null || echo 4 )"  # macOS has no nproc
 DRY_RUN=0
 
 # ── Manifest: alias -> "dir|type|code|product|prebuild|linux" ───────────────
@@ -147,9 +155,37 @@ format_target() {
     au)         printf '%s\n' "${product// /}_AU" ;;
     vst3)       printf '%s\n' "${product// /}_VST3" ;;
     clap)       printf '%s\n' "${product// /}_CLAP" ;;
+    auv3)       printf '%s\n' "${product// /}_AUv3" ;;
     lv2)        printf '%s\n' "${product// /}_LV2" ;;
     *) return 1 ;;
   esac
+}
+
+# Which targets did configure actually produce? Asking beats guessing: AUv3 is
+# a real macOS target for Vane but an iPadOS-only one for the archetype repos,
+# and "make: No rule to make target `Serpe_AUv3'" does not tell you that — it
+# just aborts the repo. With this, an unavailable format is reported and
+# skipped, and only an ENTIRELY unbuildable request is fatal.
+existing_targets() {
+  local b="$1"
+  if [ -f "$b/build.ninja" ]; then ninja -C "$b" -t targets all 2>/dev/null | sed 's/:.*//'
+  else cmake --build "$b" --target help 2>/dev/null | sed -n 's/^\.\.\. //p'; fi
+}
+# Filters "$@" (targets) against what exists in build dir $1. Prints the
+# survivors; notes the rest on stderr.
+filter_targets() {
+  local b="$1"; shift
+  local avail; avail="$(existing_targets "$b")"
+  local keep=() t
+  for t in "$@"; do
+    if printf '%s\n' "$avail" | grep -qx "$t"; then keep+=("$t")
+    elif [ "${t##*_}" = "AUv3" ]; then
+      printf 'NOTE: %s is not built here — AUv3 is the iPadOS format for this repo; use --ios (then sign/install in Xcode).\n' "$t" >&2
+    else
+      printf 'NOTE: %s is not a target of this repo on this platform — skipped.\n' "$t" >&2
+    fi
+  done
+  printf '%s\n' "${keep[@]:-}"
 }
 
 list() {
@@ -245,7 +281,13 @@ build_one() {
           }
           targets+=("$t")
         done
-        printf -- '— Linux: %s\n' "$FORMATS"
+        if [ "$DRY_RUN" != 1 ]; then
+          buildable=()
+          while IFS= read -r t; do [ -n "$t" ] && buildable+=("$t"); done < <(filter_targets build-linux "${targets[@]}")
+          [ "${#buildable[@]}" -gt 0 ] || { printf 'FAIL: none of the requested formats exist in this repo on Linux.\n' >&2; exit 1; }
+          targets=("${buildable[@]}")
+        fi
+        printf -- '— Linux: %s\n' "${targets[*]}"
         run "$XVFB cmake --build build-linux -j\$(nproc) --target ${targets[*]}" || exit 1
       else
         printf -- '— Linux: LV2/VST3/CLAP/Standalone\n'
@@ -265,16 +307,22 @@ build_one() {
         IFS=',' read -ra fs <<<"$FORMATS"
         for f in "${fs[@]}"; do
           t="$(format_target "$product" "$f")" || {
-            printf 'FAIL: unknown format "%s" (au, vst3, clap, lv2, standalone)\n' "$f" >&2
+            printf 'FAIL: unknown format "%s" (macOS: au, auv3, vst3, clap, standalone)\n' "$f" >&2
             exit 1
           }
           targets+=("$t")
         done
         run "cmake -B build -DCMAKE_BUILD_TYPE=Release" || exit 1
-        run "cmake --build build --target ${targets[*]}" || exit 1
+        if [ "$DRY_RUN" != 1 ]; then
+          buildable=()
+          while IFS= read -r t; do [ -n "$t" ] && buildable+=("$t"); done < <(filter_targets build "${targets[@]}")
+          [ "${#buildable[@]}" -gt 0 ] || { printf 'FAIL: none of the requested formats exist in this repo on macOS.\n' >&2; exit 1; }
+          targets=("${buildable[@]}")
+        fi
+        run "cmake --build build -j $JOBS --target ${targets[*]}" || exit 1
       else
         run "cmake -B build -DCMAKE_BUILD_TYPE=Release" || exit 1
-        run "cmake --build build -j 8" || exit 1
+        run "cmake --build build -j $JOBS" || exit 1
       fi
     fi
 
@@ -286,6 +334,27 @@ build_one() {
   )
 }
 
+# The two committed-bundle repos bundle `@enkerli/*` from packages/*/dist,
+# and dist/ is gitignored — so a pull that changed theory/ui leaves a fresh
+# app source compiled against STALE shared code (or none at all, on a new
+# clone). `tsc -b` is incremental: a no-op when current, essential when not.
+monorepo_prep() {
+  if [ "$NO_NODE" = 1 ]; then printf -- '— monorepo prep skipped (--no-node)\n'; return 0; fi
+  if [ ! -d "$MUSIC_SUITE" ]; then
+    printf 'NOTE: music-suite not found at %s — skipping the shared-package build.\n      MIDIcurator/ProgGenie bundles would be built against whatever dist/ is there.\n' "$MUSIC_SUITE" >&2
+    return 0
+  fi
+  if [ ! -d "$MUSIC_SUITE/node_modules" ]; then
+    printf 'FAIL: %s has no node_modules — run once:  (cd %s && npm install)\n' "$MUSIC_SUITE" "$MUSIC_SUITE" >&2
+    return 1
+  fi
+  printf -- '— shared packages (@enkerli/*): tsc -b\n'
+  run "(cd \"$MUSIC_SUITE\" && npm run build-packages >/dev/null)" || {
+    printf 'FAIL: shared packages did not build — every WebUI bundle below would be stale.\n' >&2
+    return 1
+  }
+}
+
 # ── Arg parsing ───────────────────────────────────────────────────────────
 [ $# -eq 0 ] && usage 1
 REPO=""
@@ -293,6 +362,7 @@ FORMATS=""
 LADDER=0
 FRESH=0
 IOS=0
+NO_NODE=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --list) list ;;
@@ -300,6 +370,7 @@ while [ $# -gt 0 ]; do
     --ladder) LADDER=1 ;;
     --fresh) FRESH=1 ;;
     --ios) IOS=1 ;;
+    --no-node) NO_NODE=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --formats) FORMATS="$2"; shift ;;
     --formats=*) FORMATS="${1#--formats=}" ;;
@@ -309,6 +380,8 @@ while [ $# -gt 0 ]; do
   shift
 done
 [ -n "$REPO" ] || usage 1
+
+monorepo_prep || exit 1
 
 if [ "$REPO" = "all" ]; then
   SELECTED=("${ORDER[@]}")
