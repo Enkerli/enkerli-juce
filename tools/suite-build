@@ -8,7 +8,7 @@
 # arguments, and adds the Linux leg validate.sh doesn't cover.
 #
 # Usage:
-#   suite-build <repo[,repo...]|all> [--formats au,auv3,vst3,clap,lv2] [--ladder] [--fresh] [--ios] [--no-node] [--dry-run]
+#   suite-build <repo[,repo...]|all> [--formats au,auv3,vst3,clap,lv2] [--ladder] [--fresh] [--ios] [--pull] [--no-node] [--dry-run]
 #   suite-build --list
 #
 # <repo> is a manifest alias below (midicurator, proggenie, pitchfold, vane,
@@ -59,6 +59,12 @@
 #               (a "successful" incremental build can still ship old bytes).
 #   --ios       Also do the iOS unsigned compile, standalone from --ladder
 #               (e.g. you want just the compile check, not the whole ladder).
+#   --pull      Update first: music-suite, then each selected repo and its
+#               submodules (git pull --ff-only). Replaces the by-hand
+#               nine-repo for-loop in BUILD.md's Quickstart. A repo with
+#               local changes fails loudly rather than being skipped — the
+#               one exception is the two committed WebUI bundles, which are
+#               generated files this script rewrites anyway.
 #   --dry-run   Print every command instead of running it. Use this to sanity
 #               check a repo/flag combination before committing to a real
 #               build — especially useful on a machine you haven't run this
@@ -100,6 +106,16 @@ if [ -z "${JUCE_PATH:-}" ]; then
   else JUCE_PATH="$SUITE_ROOT/JUCE"; fi   # nonexistent: repos will FetchContent, and say so
 fi
 export JUCE_PATH                                         # enkerli_resolve_juce() (EnkerliPlugin.cmake) reads this
+
+# The OTHER heavy dependency: clap-juce-extensions carries the CLAP SDK as
+# submodules, so a per-repo FetchContent is the slowest thing in a cold build
+# — and every CLAP-building repo did one. Same treatment as JUCE: one shared
+# checkout beside the repos, exported, probed by all three resolution sites
+# (the archetype, Vane, DrawnQurve) before they fetch (2026-07-27).
+if [ -z "${CLAP_JUCE_PATH:-}" ] && [ -f "$SUITE_ROOT/clap-juce-extensions/CMakeLists.txt" ]; then
+  CLAP_JUCE_PATH="$SUITE_ROOT/clap-juce-extensions"
+fi
+[ -n "${CLAP_JUCE_PATH:-}" ] && export CLAP_JUCE_PATH
 VALIDATE="$JUCE_REPO/tools/validate.sh"
 JOBS="$( (sysctl -n hw.ncpu || nproc) 2>/dev/null || echo 4 )"  # macOS has no nproc
 DRY_RUN=0
@@ -278,6 +294,11 @@ build_one() {
     set -euo pipefail
     cd "$path" || exit 1
 
+    if [ "$PULL" = 1 ]; then
+      printf -- '— pull\n'
+      pull_repo "$path" "$alias" || exit 1
+    fi
+
     if [ "$prebuild" != "-" ]; then
       if [ ! -d "$MUSIC_SUITE" ]; then
         printf 'FAIL: %s: music-suite not found at %s — set MUSIC_SUITE, or check it out as a sibling named "music-suite"\n' "$alias" "$MUSIC_SUITE" >&2
@@ -382,15 +403,43 @@ build_one() {
 # and dist/ is gitignored — so a pull that changed theory/ui leaves a fresh
 # app source compiled against STALE shared code (or none at all, on a new
 # clone). `tsc -b` is incremental: a no-op when current, essential when not.
+# Pulling was the biggest thing this script left you to do by hand (BUILD.md's
+# Quickstart still carries the nine-repo for-loop). --pull folds it in: the
+# monorepo, then each selected repo and its submodules, reported per repo.
+pull_repo() {   # $1 = dir, $2 = label
+  local d="$1" label="$2"
+  # The committed WebUI bundle is GENERATED and rewritten below, so a locally
+  # rebuilt one blocks the pull. Discard it — and only it — when it is the
+  # sole change; anything else is left alone and the pull fails loudly.
+  if [ "$(git -C "$d" status --porcelain 2>/dev/null | wc -l | tr -d ' ')" = 1 ] \
+     && git -C "$d" status --porcelain 2>/dev/null | grep -q '^ M WebUI/index.html$'; then
+    printf -- '  (discarding the locally regenerated WebUI bundle — rebuilt below)\n'
+    run "git -C \"$d\" checkout -- WebUI/index.html" || return 1
+  fi
+  if run "git -C \"$d\" pull --ff-only --quiet && git -C \"$d\" submodule update --init --recursive --quiet"; then
+    printf -- '  %s now at %s\n' "$label" "$(git -C "$d" log -1 --format=%h 2>/dev/null)"
+  else
+    printf 'FAIL: %s: git pull failed (local changes, or diverged) — resolve it and re-run.\n' "$label" >&2
+    return 1
+  fi
+}
+
 monorepo_prep() {
   if [ "$NO_NODE" = 1 ]; then printf -- '— monorepo prep skipped (--no-node)\n'; return 0; fi
   if [ ! -d "$MUSIC_SUITE" ]; then
     printf 'NOTE: music-suite not found at %s — skipping the shared-package build.\n      MIDIcurator/ProgGenie bundles would be built against whatever dist/ is there.\n' "$MUSIC_SUITE" >&2
     return 0
   fi
+  if [ "$PULL" = 1 ]; then
+    printf -- '— pulling music-suite\n'
+    pull_repo "$MUSIC_SUITE" "music-suite" || return 1
+  fi
   if [ ! -d "$MUSIC_SUITE/node_modules" ]; then
-    printf 'FAIL: %s has no node_modules — run once:  (cd %s && npm install)\n' "$MUSIC_SUITE" "$MUSIC_SUITE" >&2
-    return 1
+    # Do it rather than instruct: "run npm install first" is exactly the
+    # preparation this entry point exists to remove.
+    printf -- '— npm install (first run in this checkout)\n'
+    run "(cd \"$MUSIC_SUITE\" && npm install --no-audit --no-fund >/dev/null)" || {
+      printf 'FAIL: npm install in %s\n' "$MUSIC_SUITE" >&2; return 1; }
   fi
   printf -- '— shared packages (@enkerli/*): tsc -b\n'
   run "(cd \"$MUSIC_SUITE\" && npm run build-packages >/dev/null)" || {
@@ -407,6 +456,7 @@ LADDER=0
 FRESH=0
 IOS=0
 NO_NODE=0
+PULL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --list) list ;;
@@ -415,6 +465,7 @@ while [ $# -gt 0 ]; do
     --fresh) FRESH=1 ;;
     --ios) IOS=1 ;;
     --no-node) NO_NODE=1 ;;
+    --pull) PULL=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --formats) FORMATS="$2"; shift ;;
     --formats=*) FORMATS="${1#--formats=}" ;;
