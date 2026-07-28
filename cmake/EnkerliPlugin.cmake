@@ -16,6 +16,14 @@
 
 set(ENKERLI_IOS_TEAM_ID "P8W7XXJN6C" CACHE STRING "Apple Developer Team ID for iOS signing")
 
+# Installing a desktop build copies it into the user plug-in folders, which are
+# SHARED — so building an experimental branch silently replaces the plugin your
+# DAW loads, with nothing to say which build it is (2026-07-27: a branch build
+# took over the installed Serpe mid-session). Turn this OFF for branch/
+# experiment builds and the artefacts stay in the build tree, where a host only
+# sees them if you point it there. ON by default: normal builds still install.
+option(ENKERLI_INSTALL_PLUGINS "Copy built plugins into the user plug-in folders" ON)
+
 # ── JUCE resolution: installed → local JUCE/ or -DJUCE_PATH → FetchContent ──
 macro(enkerli_resolve_juce)
     if(NOT TARGET juce::juce_core)
@@ -215,7 +223,7 @@ function(_enkerli_add_plugin target archetype)
         juce_add_plugin(${target}
             ${_base_props}
             FORMATS                     AU VST3 Standalone
-            COPY_PLUGIN_AFTER_BUILD     TRUE
+            COPY_PLUGIN_AFTER_BUILD     ${ENKERLI_INSTALL_PLUGINS}
             SUPPRESS_AU_PLIST_RESOURCE_USAGE TRUE)
     elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
         if(NOT ARG_LV2_URI)
@@ -231,7 +239,7 @@ function(_enkerli_add_plugin target archetype)
             ${_base_props}
             FORMATS                     LV2 VST3 Standalone
             LV2_URI                     "${ARG_LV2_URI}"
-            COPY_PLUGIN_AFTER_BUILD     TRUE)
+            COPY_PLUGIN_AFTER_BUILD     ${ENKERLI_INSTALL_PLUGINS})
     else()
         # Windows (and any other desktop): VST3 is THE plugin format there, so
         # build it alongside Standalone (AU is Apple-only; LV2 is the Linux

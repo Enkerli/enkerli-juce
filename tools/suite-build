@@ -8,7 +8,7 @@
 # arguments, and adds the Linux leg validate.sh doesn't cover.
 #
 # Usage:
-#   suite-build <repo[,repo...]|all> [--formats au,auv3,vst3,clap,lv2] [--ladder] [--fresh] [--ios] [--pull] [--no-clone] [--no-link] [--dry-run]
+#   suite-build <repo[,repo...]|all> [--formats au,auv3,vst3,clap,lv2] [--ladder] [--fresh] [--ios] [--pull] [--no-install] [--no-clone] [--no-link] [--dry-run]
 #   suite-build --list
 #
 # <repo> is a manifest alias below (midicurator, proggenie, pitchfold, vane,
@@ -73,6 +73,11 @@
 #               just built becomes the one `msuite` runs (npm link), because a
 #               global link otherwise keeps pointing at whichever tree was
 #               linked first.
+#   --no-install  Do not copy the built plugins into the user plug-in folders.
+#               Those folders are SHARED, so a branch build otherwise replaces
+#               whatever your DAW loads, with nothing on screen to say which
+#               build it is. Use this for every experimental branch; the
+#               artefacts stay under build/ and the Standalone still runs.
 #   --dry-run   Print every command instead of running it. Use this to sanity
 #               check a repo/flag combination before committing to a real
 #               build — especially useful on a machine you haven't run this
@@ -127,6 +132,7 @@ fi
 JUCE_TAG=8.0.13
 VALIDATE="$JUCE_REPO/tools/validate.sh"
 JOBS="$( (sysctl -n hw.ncpu || nproc) 2>/dev/null || echo 4 )"  # macOS has no nproc
+INSTALL_ARG=""
 DRY_RUN=0
 
 # ── Manifest: alias -> "dir|type|code|target|prebuild|linux" ───────────────
@@ -337,7 +343,7 @@ build_one() {
         exit 1
       fi
       drop_stale_juce_cache build-linux || exit 1
-      run "cmake -B build-linux" || exit 1
+      run "cmake -B build-linux $INSTALL_ARG" || exit 1
 
       # The LV2 target's manifest step runs the built plugin headlessly to
       # introspect it; without a display that can crash (Gtk "cannot open
@@ -392,7 +398,7 @@ build_one() {
           }
           targets+=("$t")
         done
-        run "cmake -B build -DCMAKE_BUILD_TYPE=Release" || exit 1
+        run "cmake -B build -DCMAKE_BUILD_TYPE=Release $INSTALL_ARG" || exit 1
         if [ "$DRY_RUN" != 1 ]; then
           buildable=()
           while IFS= read -r t; do [ -n "$t" ] && buildable+=("$t"); done < <(filter_targets build "${targets[@]}")
@@ -401,7 +407,7 @@ build_one() {
         fi
         run "cmake --build build -j $JOBS --target ${targets[*]}" || exit 1
       else
-        run "cmake -B build -DCMAKE_BUILD_TYPE=Release" || exit 1
+        run "cmake -B build -DCMAKE_BUILD_TYPE=Release $INSTALL_ARG" || exit 1
         run "cmake --build build -j $JOBS" || exit 1
       fi
     fi
@@ -558,6 +564,7 @@ NO_NODE=0
 PULL=0
 NO_CLONE=0
 NO_LINK=0
+NO_INSTALL=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --list) list ;;
@@ -568,6 +575,7 @@ while [ $# -gt 0 ]; do
     --no-node) NO_NODE=1 ;;
     --no-clone) NO_CLONE=1 ;;
     --no-link) NO_LINK=1 ;;
+    --no-install) NO_INSTALL=1 ;;
     --pull) PULL=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --formats) FORMATS="$2"; shift ;;
@@ -580,6 +588,7 @@ done
 [ -n "$REPO" ] || usage 1
 
 bootstrap || exit 1
+[ "$NO_INSTALL" = 1 ] && INSTALL_ARG="-DENKERLI_INSTALL_PLUGINS=OFF"
 monorepo_prep || exit 1
 
 if [ "$REPO" = "all" ]; then
