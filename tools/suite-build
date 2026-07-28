@@ -431,7 +431,12 @@ pull_repo() {   # $1 = dir, $2 = label
     printf -- '  (discarding the locally regenerated WebUI bundle — rebuilt below)\n'
     run "git -C \"$d\" checkout -- WebUI/index.html" || return 1
   fi
-  if run "git -C \"$d\" pull --ff-only --quiet && git -C \"$d\" submodule update --init --recursive --quiet"; then
+  # --autostash, not a bare pull: incidental local changes (above all
+  # package-lock.json, which npm rewrites — including npm install run by THIS
+  # script, so a bare pull could be blocked by our own side effect) are
+  # stashed, the pull happens, and they are reapplied. Nothing is discarded;
+  # if reapplying conflicts, git leaves the stash and this reports the failure.
+  if run "git -C \"$d\" pull --ff-only --autostash --quiet && git -C \"$d\" submodule update --init --recursive --quiet"; then
     printf -- '  %s now at %s\n' "$label" "$(git -C "$d" log -1 --format=%h 2>/dev/null)"
   else
     printf 'FAIL: %s: git pull failed (local changes, or diverged) — resolve it and re-run.\n' "$label" >&2
@@ -464,14 +469,14 @@ bootstrap() {
   # location, so this defines one rather than letting seven repos each fetch
   # (and build) their own ~500MB copy.
   if [ ! -f "$JUCE_PATH/CMakeLists.txt" ] && [ "$NO_CLONE" != 1 ]; then
-    printf -- '— no JUCE found; cloning %s once for every repo\n' "$JUCE_TAG"
+    printf -- '— no JUCE found; cloning %s once, shared by every repo\n' "$JUCE_TAG"
     run "git clone --quiet --depth 1 --branch $JUCE_TAG https://github.com/juce-framework/JUCE \"$SUITE_ROOT/JUCE\"" \
       && JUCE_PATH="$SUITE_ROOT/JUCE" && export JUCE_PATH
   fi
   # Same for clap-juce-extensions (it carries the CLAP SDK as submodules, so a
   # per-repo fetch is the slowest thing in a cold build).
   if [ -z "${CLAP_JUCE_PATH:-}" ] && [ ! -f "$SUITE_ROOT/clap-juce-extensions/CMakeLists.txt" ] && [ "$NO_CLONE" != 1 ]; then
-    printf -- '— cloning clap-juce-extensions once for every repo\n'
+    printf -- '— cloning clap-juce-extensions once, shared by every repo\n'
     run "git clone --quiet --recurse-submodules https://github.com/free-audio/clap-juce-extensions \"$SUITE_ROOT/clap-juce-extensions\"" || true
   fi
   [ -f "$SUITE_ROOT/clap-juce-extensions/CMakeLists.txt" ] && { CLAP_JUCE_PATH="$SUITE_ROOT/clap-juce-extensions"; export CLAP_JUCE_PATH; }
@@ -524,9 +529,15 @@ monorepo_prep() {
   if [ ! -d "$MUSIC_SUITE/node_modules" ]; then
     # Do it rather than instruct: "run npm install first" is exactly the
     # preparation this entry point exists to remove.
-    printf -- '— npm install (first run in this checkout)\n'
-    run "(cd \"$MUSIC_SUITE\" && npm install --no-audit --no-fund >/dev/null)" || {
-      printf 'FAIL: npm install in %s\n' "$MUSIC_SUITE" >&2; return 1; }
+    # `npm ci` before `npm install`: it installs exactly what the lockfile
+    # says and does NOT rewrite it. Plain install can churn the lock (npm
+    # versions differ between machines), which then blocks the next --pull —
+    # a mess this script used to create for itself. ci needs the lock to match
+    # package.json, so fall back when it does not.
+    printf -- '— installing monorepo dependencies (first run in this checkout)\n'
+    run "(cd \"$MUSIC_SUITE\" && npm ci --no-audit --no-fund >/dev/null 2>&1)" \
+      || run "(cd \"$MUSIC_SUITE\" && npm install --no-audit --no-fund >/dev/null)" \
+      || { printf 'FAIL: could not install dependencies in %s\n' "$MUSIC_SUITE" >&2; return 1; }
   fi
   printf -- '— shared packages (@enkerli/*): tsc -b\n'
   run "(cd \"$MUSIC_SUITE\" && npm run build-packages >/dev/null)" || {
