@@ -441,6 +441,22 @@ monorepo_prep() {
     run "(cd \"$MUSIC_SUITE\" && npm install --no-audit --no-fund >/dev/null)" || {
       printf 'FAIL: npm install in %s\n' "$MUSIC_SUITE" >&2; return 1; }
   fi
+  # A globally linked `msuite` points into ONE checkout. Update a different
+  # one and the command silently keeps running the old source — @enkerli/upi
+  # is plain JS loaded straight from src/, so there is no build step whose
+  # absence would give it away, and the only symptom is a feature that
+  # "doesn't exist" (a 2026-07-27 field report: A(2,2,3,2) parsed on one
+  # machine and not the other, same commit).
+  if command -v msuite >/dev/null 2>&1; then
+    _mp="$(command -v msuite)"
+    _rp="$(readlink -f "$_mp" 2>/dev/null \
+           || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$_mp" 2>/dev/null \
+           || printf '%s' "$_mp")"
+    case "$_rp" in
+      "$MUSIC_SUITE"/*) : ;;
+      *) printf 'NOTE: the `msuite` on your PATH resolves to\n        %s\n      which is NOT the checkout being built (%s).\n      It will keep running that other copy. Re-link with:\n        (cd "%s" && sudo npm link -w @enkerli/cli)\n' "$_rp" "$MUSIC_SUITE" "$MUSIC_SUITE" >&2 ;;
+    esac
+  fi
   printf -- '— shared packages (@enkerli/*): tsc -b\n'
   run "(cd \"$MUSIC_SUITE\" && npm run build-packages >/dev/null)" || {
     printf 'FAIL: shared packages did not build — every WebUI bundle below would be stale.\n' >&2
