@@ -8,7 +8,7 @@
 # arguments, and adds the Linux leg validate.sh doesn't cover.
 #
 # Usage:
-#   suite-build <repo[,repo...]|all> [--formats au,auv3,vst3,clap,lv2] [--ladder] [--fresh] [--ios] [--pull] [--no-node] [--dry-run]
+#   suite-build <repo[,repo...]|all> [--formats au,auv3,vst3,clap,lv2] [--ladder] [--fresh] [--ios] [--pull] [--no-clone] [--no-link] [--dry-run]
 #   suite-build --list
 #
 # <repo> is a manifest alias below (midicurator, proggenie, pitchfold, vane,
@@ -65,6 +65,14 @@
 #               local changes fails loudly rather than being skipped — the
 #               one exception is the two committed WebUI bundles, which are
 #               generated files this script rewrites anyway.
+#   --no-clone  Do not clone anything. By default a missing repo, a missing
+#               music-suite, a missing JUCE and a missing clap-juce-extensions
+#               are all cloned into SUITE_ROOT — so a machine with nothing on
+#               it is a supported starting point, not a prerequisite.
+#   --no-link   Do not touch the global `msuite`. By default the checkout you
+#               just built becomes the one `msuite` runs (npm link), because a
+#               global link otherwise keeps pointing at whichever tree was
+#               linked first.
 #   --dry-run   Print every command instead of running it. Use this to sanity
 #               check a repo/flag combination before committing to a real
 #               build — especially useful on a machine you haven't run this
@@ -116,6 +124,7 @@ if [ -z "${CLAP_JUCE_PATH:-}" ] && [ -f "$SUITE_ROOT/clap-juce-extensions/CMakeL
   CLAP_JUCE_PATH="$SUITE_ROOT/clap-juce-extensions"
 fi
 [ -n "${CLAP_JUCE_PATH:-}" ] && export CLAP_JUCE_PATH
+JUCE_TAG=8.0.13
 VALIDATE="$JUCE_REPO/tools/validate.sh"
 JOBS="$( (sysctl -n hw.ncpu || nproc) 2>/dev/null || echo 4 )"  # macOS has no nproc
 DRY_RUN=0
@@ -275,10 +284,16 @@ build_one() {
   local dir type code product prebuild linux
   IFS='|' read -r dir type code product prebuild linux <<<"$spec"
   local path
-  path="$(resolve_dir "$SUITE_ROOT" "$dir")" || {
-    printf 'FAIL: %s: not found at %s (case-insensitive search also came up empty) — set SUITE_ROOT, or check it out as a sibling\n' "$alias" "$SUITE_ROOT/$dir" >&2
-    return 1
-  }
+  if ! path="$(resolve_dir "$SUITE_ROOT" "$dir")"; then
+    # A bare machine is a supported starting point: clone it rather than
+    # reporting homework. --no-clone restores the old behaviour.
+    if [ "$NO_CLONE" != 1 ] && clone_into "$SUITE_ROOT/$dir" "$dir" "--recurse-submodules"; then
+      path="$SUITE_ROOT/$dir"
+    else
+      printf 'FAIL: %s: not found at %s and not cloned — set SUITE_ROOT, check it out as a sibling, or drop --no-clone\n' "$alias" "$SUITE_ROOT/$dir" >&2
+      return 1
+    fi
+  fi
 
   printf '\n=== %s (%s) ===\n' "$product" "$path"
   (
@@ -424,6 +439,78 @@ pull_repo() {   # $1 = dir, $2 = label
   fi
 }
 
+# ── Bootstrap: make a bare machine work, and make THIS root the one that runs ─
+# Two cases have to behave (2026-07-27): a device with nothing from the suite
+# on it, and a device that already has builds — possibly in another directory.
+# Case 1 needs the repos and shared dependencies cloned; case 2 needs the
+# command you type to point at the tree you just built, not whichever checkout
+# happened to be linked first. Both are the default path; --no-clone and
+# --no-link opt out.
+GH=https://github.com/Enkerli
+
+clone_into() {   # $1 = destination dir, $2 = repo name, $3 = extra git args
+  [ "$NO_CLONE" = 1 ] && return 1
+  printf -- '— cloning %s → %s\n' "$2" "$1"
+  run "git clone --quiet $3 \"$GH/$2\" \"$1\"" || {
+    printf 'FAIL: could not clone %s\n' "$2" >&2; return 1; }
+}
+
+bootstrap() {
+  # music-suite itself: everything else needs its apps/ and packages/.
+  if [ ! -f "$MUSIC_SUITE/package.json" ] && [ "$NO_CLONE" != 1 ]; then
+    clone_into "$MUSIC_SUITE" "music-suite" "--recurse-submodules" || return 1
+  fi
+  # One JUCE. macOS usually has /Applications/JUCE; Linux has no standard
+  # location, so this defines one rather than letting seven repos each fetch
+  # (and build) their own ~500MB copy.
+  if [ ! -f "$JUCE_PATH/CMakeLists.txt" ] && [ "$NO_CLONE" != 1 ]; then
+    printf -- '— no JUCE found; cloning %s once for every repo\n' "$JUCE_TAG"
+    run "git clone --quiet --depth 1 --branch $JUCE_TAG https://github.com/juce-framework/JUCE \"$SUITE_ROOT/JUCE\"" \
+      && JUCE_PATH="$SUITE_ROOT/JUCE" && export JUCE_PATH
+  fi
+  # Same for clap-juce-extensions (it carries the CLAP SDK as submodules, so a
+  # per-repo fetch is the slowest thing in a cold build).
+  if [ -z "${CLAP_JUCE_PATH:-}" ] && [ ! -f "$SUITE_ROOT/clap-juce-extensions/CMakeLists.txt" ] && [ "$NO_CLONE" != 1 ]; then
+    printf -- '— cloning clap-juce-extensions once for every repo\n'
+    run "git clone --quiet --recurse-submodules https://github.com/free-audio/clap-juce-extensions \"$SUITE_ROOT/clap-juce-extensions\"" || true
+  fi
+  [ -f "$SUITE_ROOT/clap-juce-extensions/CMakeLists.txt" ] && { CLAP_JUCE_PATH="$SUITE_ROOT/clap-juce-extensions"; export CLAP_JUCE_PATH; }
+  return 0
+}
+
+# Make the checkout we just built the one `msuite` runs. A global link binds to
+# ONE tree; update another and the command silently keeps running the old
+# source (@enkerli/upi loads straight from src/, so there is no stale dist to
+# give it away — a 2026-07-27 field report where A(2,2,3,2) parsed on one
+# machine and not the other, same commit, two roots).
+link_cli() {
+  [ "$NO_LINK" = 1 ] && return 0
+  local cur rp
+  if cur="$(command -v msuite 2>/dev/null)"; then
+    rp="$(readlink -f "$cur" 2>/dev/null \
+          || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$cur" 2>/dev/null \
+          || printf '%s' "$cur")"
+    case "$rp" in "$MUSIC_SUITE"/*) return 0 ;; esac      # already this tree
+    printf -- '— msuite currently runs %s — relinking to this checkout\n' "$rp"
+  else
+    printf -- '— msuite is not on PATH — linking it\n'
+  fi
+  if run "(cd \"$MUSIC_SUITE\" && npm link -w @enkerli/cli >/dev/null 2>&1)"; then
+    printf -- '  msuite → %s\n' "$MUSIC_SUITE"
+    return 0
+  fi
+  # npm's global prefix usually is not user-writable; sudo prompts in the
+  # user's own terminal, which is why this is offered rather than assumed.
+  if [ -t 0 ] && [ "$DRY_RUN" != 1 ]; then
+    printf -- '  the npm global prefix needs root; running: sudo npm link -w @enkerli/cli\n'
+    if (cd "$MUSIC_SUITE" && sudo npm link -w @enkerli/cli >/dev/null 2>&1); then
+      printf -- '  msuite → %s\n' "$MUSIC_SUITE"; return 0
+    fi
+  fi
+  printf 'NOTE: could not link msuite. Run it yourself:\n        (cd "%s" && sudo npm link -w @enkerli/cli)\n' "$MUSIC_SUITE" >&2
+  return 0   # never fail a build over this
+}
+
 monorepo_prep() {
   if [ "$NO_NODE" = 1 ]; then printf -- '— monorepo prep skipped (--no-node)\n'; return 0; fi
   if [ ! -d "$MUSIC_SUITE" ]; then
@@ -441,27 +528,12 @@ monorepo_prep() {
     run "(cd \"$MUSIC_SUITE\" && npm install --no-audit --no-fund >/dev/null)" || {
       printf 'FAIL: npm install in %s\n' "$MUSIC_SUITE" >&2; return 1; }
   fi
-  # A globally linked `msuite` points into ONE checkout. Update a different
-  # one and the command silently keeps running the old source — @enkerli/upi
-  # is plain JS loaded straight from src/, so there is no build step whose
-  # absence would give it away, and the only symptom is a feature that
-  # "doesn't exist" (a 2026-07-27 field report: A(2,2,3,2) parsed on one
-  # machine and not the other, same commit).
-  if command -v msuite >/dev/null 2>&1; then
-    _mp="$(command -v msuite)"
-    _rp="$(readlink -f "$_mp" 2>/dev/null \
-           || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "$_mp" 2>/dev/null \
-           || printf '%s' "$_mp")"
-    case "$_rp" in
-      "$MUSIC_SUITE"/*) : ;;
-      *) printf 'NOTE: the `msuite` on your PATH resolves to\n        %s\n      which is NOT the checkout being built (%s).\n      It will keep running that other copy. Re-link with:\n        (cd "%s" && sudo npm link -w @enkerli/cli)\n' "$_rp" "$MUSIC_SUITE" "$MUSIC_SUITE" >&2 ;;
-    esac
-  fi
   printf -- '— shared packages (@enkerli/*): tsc -b\n'
   run "(cd \"$MUSIC_SUITE\" && npm run build-packages >/dev/null)" || {
     printf 'FAIL: shared packages did not build — every WebUI bundle below would be stale.\n' >&2
     return 1
   }
+  link_cli
 }
 
 # ── Arg parsing ───────────────────────────────────────────────────────────
@@ -473,6 +545,8 @@ FRESH=0
 IOS=0
 NO_NODE=0
 PULL=0
+NO_CLONE=0
+NO_LINK=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --list) list ;;
@@ -481,6 +555,8 @@ while [ $# -gt 0 ]; do
     --fresh) FRESH=1 ;;
     --ios) IOS=1 ;;
     --no-node) NO_NODE=1 ;;
+    --no-clone) NO_CLONE=1 ;;
+    --no-link) NO_LINK=1 ;;
     --pull) PULL=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --formats) FORMATS="$2"; shift ;;
@@ -492,6 +568,7 @@ while [ $# -gt 0 ]; do
 done
 [ -n "$REPO" ] || usage 1
 
+bootstrap || exit 1
 monorepo_prep || exit 1
 
 if [ "$REPO" = "all" ]; then
