@@ -52,6 +52,29 @@ public:
     }
 
 private:
+    /**
+     * JS run before the page loads, publishing the NATIVE side's build stamps.
+     * The WebUI bundle stamps itself at bundle time (see each repo's
+     * cmake/write-build-tag.cmake); this is the other half, and the pair makes a
+     * mismatch visible:
+     *
+     *   UI newer than the binary  the bundle was rebuilt but never embedded and
+     *                             relinked — the running UI is not what you built
+     *   both old                  the built plugin never replaced the installed one
+     *
+     * Both happened on 2026-07-29/30 and neither was visible from the plugin.
+     */
+    static juce::String buildStampScript()
+    {
+        const auto self = juce::File::getSpecialLocation (juce::File::currentApplicationFile);
+        const auto when = self.exists()
+            ? self.getLastModificationTime().formatted ("%Y-%m-%d %H:%M")
+            : juce::String ("unknown");
+        return "window.__CPP_BUILD_TAG__ = " + juce::JSON::toString (when)
+             + "; window.__CPP_COMPILED__ = "
+             + juce::JSON::toString (juce::String (__DATE__ " " __TIME__)) + ";";
+    }
+
     static juce::WebBrowserComponent::Options makeOptions (ResourceMap resources, EventMap events)
     {
         auto resourcesShared = std::make_shared<ResourceMap> (std::move (resources));
@@ -82,6 +105,7 @@ private:
                     return juce::WebBrowserComponent::Resource { std::move (bytes), juce::String (r.mime) };
                 },
                 juce::WebBrowserComponent::getResourceProviderRoot())
+            .withUserScript (buildStampScript())
             .withNativeIntegrationEnabled()
            #if JUCE_MAC
             .withKeepPageLoadedWhenBrowserIsHidden()
