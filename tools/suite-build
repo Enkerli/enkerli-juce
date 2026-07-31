@@ -131,6 +131,14 @@ fi
 [ -n "${CLAP_JUCE_PATH:-}" ] && export CLAP_JUCE_PATH
 JUCE_TAG=8.0.13
 VALIDATE="$JUCE_REPO/tools/validate.sh"
+
+# Per-repo detail for the summary. build_one runs in a subshell, so it reports
+# by writing here rather than by setting a variable. Before this, a run of
+# `suite-build all --ladder` printed seven bare OK lines and threw away every
+# formatpluginval result behind them (Alex, 2026-07-30: "Not much info, though").
+SB_DETAIL="$(mktemp -d)"
+trap 'rm -rf "$SB_DETAIL"' EXIT
+note() { printf '%s\n' "$*" >> "$SB_DETAIL/${alias:-unknown}"; }
 JOBS="$( (sysctl -n hw.ncpu || nproc) 2>/dev/null || echo 4 )"  # macOS has no nproc
 INSTALL_ARG=""
 DRY_RUN=0
@@ -374,9 +382,18 @@ build_one() {
         fi
         printf -- '— Linux: %s\n' "${targets[*]}"
         run "$XVFB cmake --build build-linux -j\$(nproc) --target ${targets[*]}" || exit 1
+        note "built: ${targets[*]}"
       else
         printf -- '— Linux: LV2/VST3/CLAP/Standalone\n'
         run "$XVFB cmake --build build-linux -j\$(nproc)" || exit 1
+        note "built: LV2 VST3 CLAP Standalone"
+      fi
+      # --ladder is macOS-only: validate.sh drives auval and xcodebuild. It used
+      # to be ignored here in silence, so a Linux `--ladder` run reported OK for
+      # every repo having validated nothing. Say so instead.
+      if [ "$LADDER" = 1 ]; then
+        printf -- '— NOTE: --ladder is macOS-only (auval/xcodebuild); this was a BUILD only\n' >&2
+        note "ladder: SKIPPED — macOS-only (auval/xcodebuild), Linux ran the build only"
       fi
       exit 0
     fi
@@ -385,7 +402,22 @@ build_one() {
     drop_stale_juce_cache build build-ios || exit 1
     if [ "$LADDER" = 1 ]; then
       printf -- '— full ladder via validate.sh\n'
-      run "\"$VALIDATE\" \"$path\" \"$type\" \"$code\" \"$product\"" || exit 1
+      # Tee so the rungs it reached can be reported. validate.sh exits on the
+      # first failure, so every step it printed before that one passed.
+      _lad="$SB_DETAIL/${alias}.ladder"
+      if [ "$DRY_RUN" = 1 ]; then
+        run "\"$VALIDATE\" \"$path\" \"$type\" \"$code\" \"$product\"" || exit 1
+      else
+        "$VALIDATE" "$path" "$type" "$code" "$product" 2>&1 | tee "$_lad"
+        [ "${PIPESTATUS[0]}" = 0 ] || { note "ladder: FAILED at $(grep -c '^— ' "$_lad" 2>/dev/null) rung(s) in"; exit 1; }
+      fi
+      if [ -f "$_lad" ]; then
+        # awk, not `paste -sd' · '`: paste takes a single BYTE as its delimiter,
+        # so a multibyte separator comes out mangled.
+        _rungs="$(sed -n 's/^— //p' "$_lad" | awk '{ printf "%s%s", (NR>1 ? " | " : ""), $0 } END { print "" }')"
+        note "ladder: ${_rungs:-none reported}"
+        grep -q "pluginval not installed" "$_lad" && note "  (pluginval skipped — not installed)"
+      fi
     else
       printf -- '— quick build (add --ladder for the full automatable ladder)\n'
       if [ -n "$FORMATS" ]; then
@@ -406,9 +438,11 @@ build_one() {
           targets=("${buildable[@]}")
         fi
         run "cmake --build build -j $JOBS --target ${targets[*]}" || exit 1
+        note "built: ${targets[*]}"
       else
         run "cmake -B build -DCMAKE_BUILD_TYPE=Release $INSTALL_ARG" || exit 1
         run "cmake --build build -j $JOBS" || exit 1
+        note "built: all targets (AU/VST3/CLAP/Standalone + tools)"
       fi
     fi
 
@@ -602,6 +636,10 @@ if [ "${#SELECTED[@]}" -gt 1 ]; then
   results=()
   for a in "${SELECTED[@]}"; do
     if build_one "$a"; then results+=("  OK     $a"); else results+=("  FAILED $a"); overall=1; fi
+    # Fold in what that repo actually did, so a pass says WHAT passed.
+    if [ -f "$SB_DETAIL/$a" ]; then
+      while IFS= read -r line; do results+=("           $line"); done < "$SB_DETAIL/$a"
+    fi
   done
   printf '\n— summary —\n%s\n' "$(printf '%s\n' "${results[@]}")"
   [ "$overall" = 0 ] && printf '\nAll done.\n' || printf '\nOne or more repos failed — see above.\n'
