@@ -76,9 +76,28 @@ private:
         // Either way the badge cried staleness that was not real, which is
         // worse than no badge: it is the diagnostic you are supposed to trust.
         const auto self = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
-        const auto when = self.exists()
-            ? self.getLastModificationTime().formatted ("%Y-%m-%d %H:%M")
-            : juce::String ("unknown");
+
+        // In UTC, deliberately. Time::formatted() renders LOCAL time (it goes
+        // through millisToLocal), while the UI half of the badge is written
+        // UTC by write-build-tag.cmake. The badge compares the two to decide
+        // whether the bundle is newer than the binary running it -- so on any
+        // machine not set to UTC that comparison was off by the time-zone
+        // offset, and west of Greenwich it reports the binary as older than it
+        // is. A staleness warning that fires on geography is the failure this
+        // badge exists to prevent, not one it should cause.
+        //
+        // Near a DST boundary the shifted instant can carry the adjacent
+        // offset, moving the stamp by an hour. Not worth solving: the badge
+        // answers "is this the build I just made", to the minute, once.
+        auto when = juce::String ("unknown");
+
+        if (self.exists())
+        {
+            const auto modified = self.getLastModificationTime();
+            const juce::Time utc (modified.toMilliseconds()
+                                    - (juce::int64) modified.getUTCOffsetSeconds() * 1000);
+            when = utc.formatted ("%Y-%m-%d %H:%M") + " UTC";
+        }
         return "window.__CPP_BUILD_TAG__ = " + juce::JSON::toString (when)
              + "; window.__CPP_COMPILED__ = "
              + juce::JSON::toString (juce::String (__DATE__ " " __TIME__)) + ";";
