@@ -66,7 +66,16 @@ private:
      */
     static juce::String buildStampScript()
     {
-        const auto self = juce::File::getSpecialLocation (juce::File::currentApplicationFile);
+        // currentExecutableFile, NOT currentApplicationFile: the latter is the
+        // .app/.component/.appex PACKAGE FOLDER on Apple platforms, and macOS
+        // does not touch a bundle directory's mtime when Contents/MacOS/<exe>
+        // is replaced. Two symptoms, both seen 2026-08-11 in RND Companion:
+        // a macOS standalone reporting a binary a day older than the build it
+        // was running, and an iPadOS AUv3 reporting 1969-12-31 -- epoch, i.e.
+        // the bundle was not stat-able from inside the extension at all.
+        // Either way the badge cried staleness that was not real, which is
+        // worse than no badge: it is the diagnostic you are supposed to trust.
+        const auto self = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
         const auto when = self.exists()
             ? self.getLastModificationTime().formatted ("%Y-%m-%d %H:%M")
             : juce::String ("unknown");
