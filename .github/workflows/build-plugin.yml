@@ -31,6 +31,14 @@ on:
         description: Extra args appended to the CMake configure step.
         type: string
         default: ""
+      ios:
+        description: >-
+          Build the unsigned iOS leg. Default true, which is the historical
+          behaviour. Set false in repos whose iOS builds are done by hand in
+          Xcode -- the leg costs a macOS runner and roughly doubles the wall
+          clock of a cold run for a check they are not relying on.
+        type: boolean
+        default: true
 
 jobs:
   build:
@@ -39,13 +47,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - { os: macos-latest,   name: macOS }
-          - { os: ubuntu-latest,  name: Linux }
-          - { os: windows-latest, name: Windows }
-          # iOS shares the macOS runner; ios=true switches to the Xcode
-          # generator + an unsigned build (device signing is out of CI scope).
-          - { os: macos-latest,   name: iOS, ios: true }
+        # Built from an expression so the iOS leg can be dropped entirely rather
+        # than started and skipped: a matrix `exclude` cannot read an input, and
+        # an `if` on the job still spins up the runner.
+        #
+        # iOS shares the macOS runner; ios=true switches to the Xcode generator
+        # and an unsigned build (device signing is out of CI scope).
+        include: >-
+          ${{ fromJSON(inputs.ios
+            && '[{"os":"macos-latest","name":"macOS"},{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"},{"os":"macos-latest","name":"iOS","ios":true}]'
+            || '[{"os":"macos-latest","name":"macOS"},{"os":"ubuntu-latest","name":"Linux"},{"os":"windows-latest","name":"Windows"}]') }}
     steps:
       - name: Checkout plugin
         uses: actions/checkout@v4
