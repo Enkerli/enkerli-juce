@@ -31,6 +31,14 @@ on:
         description: Extra args appended to the CMake configure step.
         type: string
         default: ""
+      pluginval:
+        description: >-
+          Run pluginval against the built VST3 on the Windows and Linux legs.
+          Opt-in (default false) because turning it on repo-wide would fail six
+          other pipelines before anyone had looked at why. macOS keeps auval as
+          its rung; this covers the two platforms nothing else touches.
+        type: boolean
+        default: false
       ios:
         description: >-
           Build the unsigned iOS leg. Default true, which is the historical
@@ -153,6 +161,58 @@ jobs:
         run: >-
           cmake --build build --config Release --
           -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=""
+
+      # ── pluginval: the only thing that opens these builds ──────────────────
+      # Compiling a Windows or Linux plugin proves nothing about whether a host
+      # can load it. pluginval instantiates it, runs audio through it, opens and
+      # closes the editor, and abuses the lifecycle — the checks nobody performs
+      # by hand on a platform they do not own.
+      #
+      # VST3 only: pluginval does not speak CLAP or LV2. GUI tests are NOT
+      # skipped, which is the point here — the UI is a WebView, and whether it
+      # comes up under WebKitGTK or WebView2 is the open question these builds
+      # carry. Linux runs it under xvfb, as the LV2 manifest step already does.
+      - name: Fetch pluginval (Linux)
+        if: ${{ inputs.pluginval && matrix.os == 'ubuntu-latest' }}
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Linux.zip
+          unzip -q pluginval.zip && chmod +x pluginval
+
+      - name: Fetch pluginval (Windows)
+        if: ${{ inputs.pluginval && matrix.os == 'windows-latest' }}
+        run: |
+          curl -sSL -o pluginval.zip https://github.com/Tracktion/pluginval/releases/latest/download/pluginval_Windows.zip
+          unzip -q pluginval.zip
+        shell: bash
+
+      - name: pluginval (Linux)
+        if: ${{ inputs.pluginval && matrix.os == 'ubuntu-latest' }}
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          found=0
+          for vst3 in plugin/build/**/Release/VST3/*.vst3; do
+            found=1
+            echo "== $vst3"
+            xvfb-run -a ./pluginval --strictness-level 8 --validate-in-process --timeout-ms 120000 "$vst3"
+          done
+          # A silent pass because the glob matched nothing would be worse than a
+          # failure: it reads as "validated".
+          [ "$found" = 1 ] || { echo "no VST3 found to validate"; exit 1; }
+
+      - name: pluginval (Windows)
+        if: ${{ inputs.pluginval && matrix.os == 'windows-latest' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s globstar nullglob
+          found=0
+          for vst3 in plugin/build/**/Release/VST3/*.vst3; do
+            found=1
+            echo "== $vst3"
+            ./pluginval.exe --strictness-level 8 --validate-in-process --timeout-ms 120000 "$vst3"
+          done
+          [ "$found" = 1 ] || { echo "no VST3 found to validate"; exit 1; }
 
       - name: Collect artifacts
         if: always()

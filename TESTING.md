@@ -23,6 +23,12 @@ as working until it has passed this ladder — "it builds" is step zero.
 3. **pluginval** (automatable, macOS, VST3+AU):
    `pluginval --strictness-level 8 --validate-in-process --skip-gui-tests <path>`
    — catches threading and lifecycle issues auval doesn't.
+   **In CI, on Windows and Linux**, via `pluginval: true` on the shared build
+   workflow — and there WITHOUT `--skip-gui-tests`, because the editor is the
+   part nobody can check by hand on a platform they do not own. Those two legs
+   are otherwise only compiled: a green build says the linker was happy and
+   nothing else. Opt-in per repo so enabling it cannot fail six pipelines at
+   once. VST3 only — pluginval does not speak CLAP or LV2.
 
 **Rungs 1–3 in one command** (used by every suite plugin):
 ```bash
